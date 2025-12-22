@@ -23,7 +23,7 @@
 #include "include/cpu.h"
 #include "include/version.h"
 
-#pragma intrinsic(_InterlockedIncrement, _InterlockedDecrement)
+#pragma intrinsic(_InterlockedIncrement, _InterlockedDecrement, _InterlockedExchange)
 
 #define BUFFER_SIZE (PROCESSOR_BITNESS * 128U)
 #define BUFFERS 3U
@@ -34,15 +34,15 @@
 // --------------------------------------------------------------------------
 
 #ifndef NDEBUG
-#define ASSERT(CONDIATION, HANDLE_OUT, MESSAGE) do { \
+#define ASSERT(CONDITION, HANDLE_OUT, MESSAGE) do { \
     static const wchar_t *const _message = L"[tee] Assertion Failed: " MESSAGE L"\n"; \
-    if (!(CONDIATION)) { \
+    if (!(CONDITION)) { \
         write_text((HANDLE_OUT), _message); \
         FatalExit(-1); \
     } \
 } while(0)
 #else
-#define ASSERT(CONDIATION, HANDLE_OUT, MESSAGE) ((void)0)
+#define ASSERT(CONDITION, HANDLE_OUT, MESSAGE) ((void)0)
 #endif
 
 // --------------------------------------------------------------------------
@@ -107,7 +107,13 @@ static wchar_t *format_string(const wchar_t *const format, ...)
     const DWORD result = FormatMessageW(FORMAT_MESSAGE_FROM_STRING | FORMAT_MESSAGE_ALLOCATE_BUFFER, format, 0U, 0U, (LPWSTR)&buffer, 1U, &ap);
     va_end(ap);
 
-    return result ? buffer : NULL;
+    if ((!result) && buffer)
+    {
+        LocalFree(buffer);
+        buffer = NULL;
+    }
+
+    return buffer;
 }
 
 static wchar_t *concat_va(const wchar_t *const first, ...)
@@ -119,7 +125,7 @@ static wchar_t *concat_va(const wchar_t *const first, ...)
     size_t len = 0U;
     for (ptr = first; ptr != NULL; ptr = va_arg(ap, const wchar_t*))
     {
-        len = lstrlenW(ptr);
+        len += lstrlenW(ptr);
     }
     va_end(ap);
 
@@ -164,7 +170,7 @@ while (0)
 // Console CTRL+C handler
 // --------------------------------------------------------------------------
 
-static volatile BOOL g_stop = FALSE;
+static volatile LONG g_stop = FALSE;
 
 static BOOL WINAPI console_handler(const DWORD ctrlType)
 {
@@ -173,7 +179,7 @@ static BOOL WINAPI console_handler(const DWORD ctrlType)
     case CTRL_C_EVENT:
     case CTRL_BREAK_EVENT:
     case CTRL_CLOSE_EVENT:
-        g_stop = TRUE;
+        _InterlockedExchange(&g_stop, TRUE);
         return TRUE;
     default:
         return FALSE;
@@ -276,8 +282,8 @@ typedef struct _thread
 thread_t;
 
 static BYTE g_buffer[BUFFERS][BUFFER_SIZE];
-static DWORD g_bytesTotal[BUFFERS] = { 0U, 0U, 0U };
-static volatile LONG g_pending[BUFFERS] = { 0L, 0L, 0L };
+static DWORD g_bytesTotal[BUFFERS] = { 0 };
+static volatile LONG g_pending[BUFFERS] = { 0 };
 static SRWLOCK g_rwLocks[BUFFERS];
 static CONDITION_VARIABLE g_condIsReady[BUFFERS], g_condAllDone[BUFFERS];
 
@@ -316,7 +322,7 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
 
         for (DWORD offset = 0U; offset < bytesTotal; offset += bytesWritten)
         {
-            const BOOL result = WriteFile(param->hOutput, g_buffer[myIndex] + offset, g_bytesTotal[myIndex] - offset, &bytesWritten, NULL);
+            const BOOL result = WriteFile(param->hOutput, g_buffer[myIndex] + offset, bytesTotal - offset, &bytesWritten, NULL);
             if ((!result) || (!bytesWritten))
             {
                 writeErrors = TRUE;
@@ -324,7 +330,7 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
             }
         }
 
-        ASSERT(g_pending > 0U, param->hError, L"Pending threads counter must be a positive value!");
+        ASSERT(g_pending[myIndex] != 0L, param->hError, L"Pending threads counter must be a non-zero value!");
 
         pending = myFlag ? _InterlockedDecrement(&g_pending[myIndex]) : _InterlockedIncrement(&g_pending[myIndex]);
 
@@ -471,13 +477,16 @@ int wmain(const int argc, const wchar_t *const argv[])
         InitializeConditionVariable(&g_condAllDone[index]);
     }
 
-    /* Set up CRTL+C handler */
-    SetConsoleCtrlHandler(console_handler, TRUE);
+    /* Set up CTRL+C handler */
+    if (!SetConsoleCtrlHandler(console_handler, TRUE))
+    {
+        write_text(hStdErr, L"[tee] Warning: Failed to set up console control handler!\n");
+    }
 
     /* Parse command-line options */
     while ((argOff < argc) && (argv[argOff][0U] == L'-') && (argv[argOff][1U] != L'\0'))
     {
-        const wchar_t *const argValue= argv[argOff++];
+        const wchar_t *const argValue = argv[argOff++];
         if ((argValue[1U] == L'-') && (argValue[2U] == L'\0'))
         {
             break; /*stop!*/
