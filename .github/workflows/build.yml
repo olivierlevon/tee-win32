@@ -31,42 +31,29 @@ jobs:
       shell: cmd
       run: |
         @echo off
-        setlocal enabledelayedexpansion
 
         if "${{ matrix.platform }}"=="x86" ( set ARCH=Win32 ) else if "${{ matrix.platform }}"=="x64" ( set ARCH=x64 ) else ( set ARCH=ARM64 )
         set CFG=${{ matrix.configuration }}
 
         set STATIC_RT=OFF
-        if "!CFG!"=="Release" set STATIC_RT=ON
+        if "%CFG%"=="Release" set STATIC_RT=ON
 
-        set BDIR=deps\pcre2\build\!ARCH!-!CFG!
+        set BDIR=deps\pcre2\build\%ARCH%-%CFG%
 
-        cmake -G "Visual Studio 17 2022" -A !ARCH! ^
-          -S deps\pcre2 -B !BDIR! ^
-          -DBUILD_SHARED_LIBS=OFF ^
-          -DPCRE2_BUILD_PCRE2_8=ON ^
-          -DPCRE2_BUILD_PCRE2_16=OFF ^
-          -DPCRE2_BUILD_PCRE2_32=OFF ^
-          -DPCRE2_BUILD_TESTS=OFF ^
-          -DPCRE2_BUILD_PCRE2GREP=OFF ^
-          -DPCRE2_SUPPORT_JIT=OFF ^
-          -DPCRE2_SUPPORT_UNICODE=OFF ^
-          -DPCRE2_NEWLINE=ANYCRLF ^
-          -DPCRE2_SUPPORT_BSR_ANYCRLF=ON ^
-          -DPCRE2_STATIC_RUNTIME=!STATIC_RT!
+        cmake -G "Visual Studio 17 2022" -A %ARCH% -S deps\pcre2 -B %BDIR% -DBUILD_SHARED_LIBS=OFF -DPCRE2_BUILD_PCRE2_8=ON -DPCRE2_BUILD_PCRE2_16=OFF -DPCRE2_BUILD_PCRE2_32=OFF -DPCRE2_BUILD_TESTS=OFF -DPCRE2_BUILD_PCRE2GREP=OFF -DPCRE2_SUPPORT_JIT=OFF -DPCRE2_SUPPORT_UNICODE=OFF -DPCRE2_NEWLINE=ANYCRLF -DPCRE2_SUPPORT_BSR_ANYCRLF=ON -DPCRE2_STATIC_RUNTIME=%STATIC_RT%
 
-        cmake --build !BDIR! --config !CFG!
+        cmake --build %BDIR% --config %CFG%
 
-        if not exist lib\!ARCH!\!CFG! mkdir lib\!ARCH!\!CFG!
+        if not exist lib\%ARCH%\%CFG% mkdir lib\%ARCH%\%CFG%
 
-        if "!CFG!"=="Debug" (
-          copy /Y "!BDIR!\!CFG!\pcre2-8-staticd.lib" "lib\!ARCH!\!CFG!\pcre2-8-static.lib"
+        if "%CFG%"=="Debug" (
+          copy /Y "%BDIR%\%CFG%\pcre2-8-staticd.lib" "lib\%ARCH%\%CFG%\pcre2-8-static.lib"
         ) else (
-          copy /Y "!BDIR!\!CFG!\pcre2-8-static.lib" "lib\!ARCH!\!CFG!\pcre2-8-static.lib"
+          copy /Y "%BDIR%\%CFG%\pcre2-8-static.lib" "lib\%ARCH%\%CFG%\pcre2-8-static.lib"
         )
 
         if not exist deps\pcre2\include mkdir deps\pcre2\include
-        copy /Y "!BDIR!\pcre2.h" "deps\pcre2\include\pcre2.h"
+        copy /Y "%BDIR%\pcre2.h" "deps\pcre2\include\pcre2.h"
 
     - name: Build
       run: msbuild tee.sln /p:Platform=${{ matrix.platform }} /p:Configuration=${{ matrix.configuration }} /m
