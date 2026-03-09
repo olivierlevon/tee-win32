@@ -545,30 +545,98 @@ static void process_sgr(ansi_conv_t *conv)
 }
 
 /* ========================================================================== */
+/* Block-copy fast path for FMT_RAW                                           */
+/* ========================================================================== */
+
+/*
+ * Copy a contiguous block of raw bytes into the output buffer, flushing as
+ * needed.  No ANSI parsing is performed.  Returns FALSE on write error.
+ */
+static BOOL out_raw_block(ansi_conv_t *conv, const BYTE *src, DWORD len)
+{
+    while (len > 0U)
+    {
+        DWORD avail = CONV_OUTBUF_SIZE - conv->out_pos;
+        DWORD chunk = (len < avail) ? len : avail;
+        CopyMemory(conv->out_buf + conv->out_pos, src, chunk);
+        conv->out_pos += chunk;
+        src += chunk;
+        len -= chunk;
+        if (conv->out_pos == CONV_OUTBUF_SIZE)
+        {
+            if (!ansi_conv_flush(conv))
+                return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/*
+ * Process a buffer of raw bytes with optional line-prefix injection.
+ * Scans for newline boundaries and copies intervening blocks in bulk
+ * via CopyMemory instead of the byte-by-byte process_byte path.
+ * Returns FALSE on write error.
+ */
+static BOOL process_raw_block(ansi_conv_t *conv, const BYTE *data, DWORD size)
+{
+    DWORD pos = 0U;
+    const BOOL has_prefix = conv->has_prefix;
+
+    while (pos < size)
+    {
+        DWORD scan, block_len;
+
+        /* Emit line prefix at the start of a new line (skip \r) */
+        if (has_prefix && conv->at_line_start && data[pos] != '\r')
+        {
+            if (!ensure_space(conv))
+                return FALSE;
+            emit_line_prefix(conv);
+        }
+
+        /* Scan forward for the next newline */
+        for (scan = pos; scan < size; ++scan)
+        {
+            if (data[scan] == '\n')
+                break;
+        }
+
+        /* Copy the block before the newline (or end of data) */
+        block_len = scan - pos;
+        if (block_len > 0U)
+        {
+            if (!out_raw_block(conv, data + pos, block_len))
+                return FALSE;
+        }
+
+        /* If we stopped on a newline, output it and mark next line start */
+        if (scan < size)
+        {
+            if (conv->out_pos >= CONV_OUTBUF_SIZE)
+            {
+                if (!ansi_conv_flush(conv))
+                    return FALSE;
+            }
+            conv->out_buf[conv->out_pos++] = '\n';
+            if (has_prefix)
+                conv->at_line_start = TRUE;
+            pos = scan + 1U;
+        }
+        else
+        {
+            pos = scan;
+        }
+    }
+    return TRUE;
+}
+
+/* ========================================================================== */
 /* ANSI escape sequence state machine                                         */
 /* ========================================================================== */
 
 static void process_byte(ansi_conv_t *conv, BYTE b)
 {
     const BOOL has_prefix = conv->has_prefix;
-
-    /* Fast path: FMT_RAW with line decorations (no ANSI parsing) */
-    if (conv->format == FMT_RAW)
-    {
-        if (b == '\n')
-        {
-            out_byte(conv, b);
-            if (has_prefix)
-                conv->at_line_start = TRUE;
-        }
-        else
-        {
-            if (conv->at_line_start && b != '\r')
-                emit_line_prefix(conv);
-            out_byte(conv, b);
-        }
-        return;
-    }
 
     switch (conv->state)
     {
@@ -726,6 +794,15 @@ BOOL ansi_conv_write(ansi_conv_t *conv, const BYTE *data, DWORD size)
     DWORD i;
     if (!conv || conv->has_error)
         return FALSE;
+
+    /* Fast path: FMT_RAW uses block-copy instead of byte-by-byte parsing */
+    if (conv->format == FMT_RAW)
+    {
+        if (!process_raw_block(conv, data, size))
+            return FALSE;
+        return ansi_conv_flush(conv);
+    }
+
     for (i = 0U; i < size; ++i)
     {
         if (!ensure_space(conv))
