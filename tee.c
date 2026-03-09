@@ -54,7 +54,9 @@
 
 static wchar_t to_lower(const wchar_t c)
 {
-    return ((c >= L'A') && (c <= L'Z')) ? (L'a' + (c - L'A')) : c;
+    wchar_t buf = c;
+    CharLowerBuffW(&buf, 1);
+    return buf;
 }
 
 static BOOL is_terminal(const HANDLE handle)
