@@ -700,7 +700,7 @@ int wmain(const int argc, const wchar_t *const argv[])
             Sleep(1U);
         }
     }
-    while ((!g_stop) || options.ignore);
+    while ((!ATOMIC_READ(&g_stop)) || options.ignore);
 
     /* Check for read errors */
     if (readErrors)

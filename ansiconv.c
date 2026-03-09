@@ -86,6 +86,7 @@ struct _ansi_conv {
     BOOL has_error;
     BOOL timestamp;
     BOOL linenumber;
+    BOOL has_prefix;
     BOOL at_line_start;
     ULONGLONG line_count;
     text_style_t style;
@@ -126,6 +127,10 @@ static BOOL ensure_space(ansi_conv_t *conv)
 
 static __forceinline void out_byte(ansi_conv_t *conv, BYTE b)
 {
+#ifndef NDEBUG
+    if (conv->out_pos >= CONV_OUTBUF_SIZE)
+        __debugbreak(); /* Output buffer overflow -- ensure_space margin exceeded */
+#endif
     conv->out_buf[conv->out_pos++] = b;
 }
 
@@ -412,7 +417,8 @@ static void reset_style(text_style_t *s)
 static void process_sgr(ansi_conv_t *conv)
 {
     int sgr[64];
-    int count = 0, val = 0, i;
+    int count = 0, i;
+    unsigned int val = 0U;
     BOOL has_val = FALSE;
 
     /* Parse semicolon/colon-separated parameter list */
@@ -421,14 +427,15 @@ static void process_sgr(ansi_conv_t *conv)
         const char c = (i < conv->param_len) ? conv->params[i] : ';';
         if (c >= '0' && c <= '9')
         {
-            val = val * 10 + (c - '0');
+            val = val * 10U + (unsigned int)(c - '0');
+            if (val > 100000U) val = 100000U; /* Clamp to prevent overflow on malformed input */
             has_val = TRUE;
         }
         else if (c == ';' || c == ':')
         {
             if (count < 64)
-                sgr[count++] = has_val ? val : 0;
-            val = 0;
+                sgr[count++] = has_val ? (int)val : 0;
+            val = 0U;
             has_val = FALSE;
         }
     }
@@ -543,7 +550,7 @@ static void process_sgr(ansi_conv_t *conv)
 
 static void process_byte(ansi_conv_t *conv, BYTE b)
 {
-    const BOOL has_prefix = conv->timestamp || conv->linenumber;
+    const BOOL has_prefix = conv->has_prefix;
 
     /* Fast path: FMT_RAW with line decorations (no ANSI parsing) */
     if (conv->format == FMT_RAW)
@@ -679,7 +686,8 @@ ansi_conv_t *ansi_conv_create(output_format_t format, HANDLE hFile, BOOL timesta
         conv->has_error = FALSE;
         conv->timestamp = timestamp;
         conv->linenumber = linenumber;
-        conv->at_line_start = (timestamp || linenumber) ? TRUE : FALSE;
+        conv->has_prefix = (timestamp || linenumber) ? TRUE : FALSE;
+        conv->at_line_start = conv->has_prefix;
         conv->line_count = 0ULL;
         conv->out_pos = 0U;
         reset_style(&conv->style);
