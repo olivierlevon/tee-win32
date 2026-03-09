@@ -749,9 +749,13 @@ int _startup(void)
 
     int nArgs;
     LPWSTR *const szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
-    if (!szArglist)
+    if ((!szArglist) || (nArgs < 1))
     {
         OutputDebugStringA("[tee-win32] System error: Failed to initialize command-line arguments!\n");
+        if (szArglist)
+        {
+            LocalFree(szArglist);
+        }
         ExitProcess((UINT)-1);
     }
 
