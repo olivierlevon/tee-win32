@@ -23,7 +23,10 @@
 #include "include/cpu.h"
 #include "include/version.h"
 
-#pragma intrinsic(_InterlockedIncrement, _InterlockedDecrement, _InterlockedExchange)
+#pragma intrinsic(_InterlockedIncrement, _InterlockedDecrement, _InterlockedExchange, _InterlockedCompareExchange)
+
+#define ATOMIC_READ(PTR)        _InterlockedCompareExchange((PTR), 0L, 0L)
+#define ATOMIC_WRITE(PTR, VAL)  _InterlockedExchange((PTR), (VAL))
 
 #define BUFFER_SIZE (PROCESSOR_BITNESS * 128U)
 #define BUFFERS 3U
@@ -38,7 +41,7 @@
     static const wchar_t *const _message = L"[tee] Assertion Failed: " MESSAGE L"\n"; \
     if (!(CONDITION)) { \
         write_text((HANDLE_OUT), _message); \
-        FatalExit(-1); \
+        __debugbreak(); \
     } \
 } while(0)
 #else
@@ -51,7 +54,9 @@
 
 static wchar_t to_lower(const wchar_t c)
 {
-    return ((c >= L'A') && (c <= L'Z')) ? (L'a' + (c - L'A')) : c;
+    wchar_t buf = c;
+    CharLowerBuffW(&buf, 1);
+    return buf;
 }
 
 static BOOL is_terminal(const HANDLE handle)
@@ -132,12 +137,19 @@ static wchar_t *concat_va(const wchar_t *const first, ...)
     wchar_t *const buffer = (wchar_t*)LocalAlloc(LPTR, sizeof(wchar_t) * (len + 1U));
     if (buffer)
     {
+        wchar_t *dest = buffer;
         va_start(ap, first);
         for (ptr = first; ptr != NULL; ptr = va_arg(ap, const wchar_t*))
         {
-            lstrcatW(buffer, ptr);
+            const int ptrLen = lstrlenW(ptr);
+            if (ptrLen > 0)
+            {
+                CopyMemory(dest, ptr, sizeof(wchar_t) * ptrLen);
+                dest += ptrLen;
+            }
         }
         va_end(ap);
+        *dest = L'\0';
     }
 
     return buffer;
@@ -301,12 +313,12 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
 
         AcquireSRWLockShared(rwLock = &g_rwLocks[myIndex]);
 
-        pending = g_pending[myIndex];
+        pending = ATOMIC_READ(&g_pending[myIndex]);
 
         while (!(myFlag ? (pending > 0L) : (pending < 0L)))
         {
             sleep_condvar_srw(param->hError, &g_condIsReady[myIndex], rwLock, INFINITE, TRUE);
-            pending = g_pending[myIndex];
+            pending = ATOMIC_READ(&g_pending[myIndex]);
         }
 
         const DWORD bytesTotal = g_bytesTotal[myIndex];
@@ -330,7 +342,7 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
             }
         }
 
-        ASSERT(g_pending[myIndex] != 0L, param->hError, L"Pending threads counter must be a non-zero value!");
+        ASSERT(ATOMIC_READ(&g_pending[myIndex]) != 0L, param->hError, L"Pending threads counter must be a non-zero value!");
 
         pending = myFlag ? _InterlockedDecrement(&g_pending[myIndex]) : _InterlockedIncrement(&g_pending[myIndex]);
 
@@ -539,7 +551,7 @@ int wmain(const int argc, const wchar_t *const argv[])
         const wchar_t* const fileName = argv[argOff++];
         if (!is_null_device(fileName))
         {
-            const HANDLE hFile = CreateFileW(fileName, GENERIC_WRITE, FILE_SHARE_READ, NULL, options.append ? OPEN_ALWAYS : CREATE_ALWAYS, 0U, NULL);
+            const HANDLE hFile = CreateFileW(fileName, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, options.append ? OPEN_ALWAYS : CREATE_ALWAYS, 0U, NULL);
             if ((hMyFiles[fileCount++] = hFile) == INVALID_HANDLE_VALUE)
             {
                 WRITE_TEXT(L"[tee] Error: Failed to open the output file \"", fileName, L"\" for writing!\n");
@@ -589,7 +601,7 @@ int wmain(const int argc, const wchar_t *const argv[])
 
         AcquireSRWLockExclusive(rwLock = &g_rwLocks[myIndex]);
 
-        while (g_pending[myIndex])
+        while (ATOMIC_READ(&g_pending[myIndex]))
         {
             sleep_condvar_srw(hStdErr, &g_condAllDone[myIndex], rwLock, INFINITE, FALSE);
         }
@@ -619,7 +631,7 @@ int wmain(const int argc, const wchar_t *const argv[])
         }
 
         g_bytesTotal[myIndex] = totalBytes;
-        g_pending[myIndex] = myFlag ? ((LONG)threadCount) : (-((LONG)threadCount));
+        ATOMIC_WRITE(&g_pending[myIndex], myFlag ? ((LONG)threadCount) : (-((LONG)threadCount)));
 
         ReleaseSRWLockExclusive(&g_rwLocks[myIndex]);
         WakeAllConditionVariable(&g_condIsReady[myIndex]);
@@ -649,20 +661,37 @@ int wmain(const int argc, const wchar_t *const argv[])
 
 cleanUp:
 
-    /* Wait for the pending writes */
+    /* Wait for the pending writes on the current buffer */
     AcquireSRWLockExclusive(&g_rwLocks[myIndex]);
-    while (g_pending[myIndex])
+    while (ATOMIC_READ(&g_pending[myIndex]))
     {
         sleep_condvar_srw(hStdErr, &g_condAllDone[myIndex], &g_rwLocks[myIndex], 25000U, FALSE);
     }
-
-    /* Shut down the remaining worker threads */
-    g_bytesTotal[myIndex] = MAXDWORD;
-    g_pending[myIndex] = myFlag ? MAXLONG : MINLONG;
     ReleaseSRWLockExclusive(&g_rwLocks[myIndex]);
-    WakeAllConditionVariable(&g_condIsReady[myIndex]);
 
-    /* Wait for worker threads to exit */
+    /* Shut down all worker threads: signal termination on ALL buffers */
+    for (DWORD bufIdx = 0U; bufIdx < BUFFERS; ++bufIdx)
+    {
+        BOOL bufFlag = myFlag;
+        if (bufIdx != myIndex)
+        {
+            /* Compute the correct flag polarity for each buffer index */
+            DWORD tmpIdx = myIndex;
+            BOOL tmpFlag = myFlag;
+            while (tmpIdx != bufIdx)
+            {
+                INCREMENT_INDEX(tmpIdx, tmpFlag);
+            }
+            bufFlag = tmpFlag;
+        }
+        AcquireSRWLockExclusive(&g_rwLocks[bufIdx]);
+        g_bytesTotal[bufIdx] = MAXDWORD;
+        ATOMIC_WRITE(&g_pending[bufIdx], bufFlag ? MAXLONG : MINLONG);
+        ReleaseSRWLockExclusive(&g_rwLocks[bufIdx]);
+        WakeAllConditionVariable(&g_condIsReady[bufIdx]);
+    }
+
+    /* Wait for worker threads to exit (cooperative shutdown) */
     const DWORD pendingThreads = count_handles(hThreads, ARRAYSIZE(hThreads));
     if (pendingThreads > 0U)
     {
@@ -673,8 +702,7 @@ cleanUp:
             {
                 if (WaitForSingleObject(hThreads[threadId], 125U) != WAIT_OBJECT_0)
                 {
-                    write_text(hStdErr, L"[tee] Internal error: Worker thread did not exit cleanly!\n");
-                    TerminateThread(hThreads[threadId], 1U);
+                    write_text(hStdErr, L"[tee] Warning: Worker thread did not exit cleanly!\n");
                 }
             }
         }
@@ -721,9 +749,13 @@ int _startup(void)
 
     int nArgs;
     LPWSTR *const szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
-    if (!szArglist)
+    if ((!szArglist) || (nArgs < 1))
     {
         OutputDebugStringA("[tee-win32] System error: Failed to initialize command-line arguments!\n");
+        if (szArglist)
+        {
+            LocalFree(szArglist);
+        }
         ExitProcess((UINT)-1);
     }
 
