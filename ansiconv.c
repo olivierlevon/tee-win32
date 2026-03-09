@@ -824,3 +824,21 @@ BOOL ansi_conv_write_footer(ansi_conv_t *conv)
     }
     return TRUE;
 }
+
+void ansi_conv_reset_for_rotation(ansi_conv_t *conv, HANDLE hFile)
+{
+    if (!conv) return;
+    ansi_conv_flush(conv);
+    conv->hFile = hFile;
+    conv->line_count = 0ULL;
+    conv->at_line_start = conv->has_prefix;
+    conv->state = STATE_NORMAL;
+    conv->param_len = 0;
+    conv->has_error = FALSE;
+    conv->out_pos = 0U;
+    if (conv->format == FMT_HTML)
+    {
+        conv->span_open = FALSE;
+        reset_style(&conv->style);
+    }
+}

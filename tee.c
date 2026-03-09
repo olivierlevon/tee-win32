@@ -32,6 +32,7 @@
 #define BUFFER_SIZE (PROCESSOR_BITNESS * 128U)
 #define BUFFERS 3U
 #define MAX_THREADS MAXIMUM_WAIT_OBJECTS
+#define GREP_LINE_BUF_SIZE 65536U
 
 // --------------------------------------------------------------------------
 // Assertions
@@ -292,6 +293,15 @@ typedef struct _thread
     HANDLE hOutput, hError;
     BOOL flush;
     ansi_conv_t *conv;
+    /* Grep filtering */
+    char *grep_utf8;            /* UTF-8 pattern, NULL = disabled */
+    int grep_utf8_len;
+    BYTE *grep_line_buf;        /* line accumulation buffer */
+    DWORD grep_line_len;
+    /* Log rotation */
+    wchar_t *fileName;          /* output file path (for rotate) */
+    ULONGLONG rotate_size;      /* 0 = disabled */
+    DWORD keep_count;
 }
 thread_t;
 
@@ -307,7 +317,8 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
     LONG pending = 0L;
     BOOL myFlag = TRUE, writeErrors = FALSE;
     PSRWLOCK rwLock = NULL;
-    const thread_t *const param = (const thread_t*)lpThreadParameter;
+    thread_t *const param = (thread_t*)lpThreadParameter;
+    BYTE filteredBuf[BUFFER_SIZE];
 
     /* Write format header (e.g., HTML preamble) if converter is active */
     if (param->conv)
@@ -332,6 +343,19 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
         const DWORD bytesTotal = g_bytesTotal[myIndex];
         if (bytesTotal > BUFFER_SIZE)
         {
+            /* Flush remaining grep line buffer before exit */
+            if (param->grep_utf8 && param->grep_line_len > 0U)
+            {
+                if (line_matches(param->grep_line_buf, param->grep_line_len, param->grep_utf8, param->grep_utf8_len))
+                {
+                    if (param->conv)
+                        ansi_conv_write(param->conv, param->grep_line_buf, param->grep_line_len);
+                    else
+                        WriteFile(param->hOutput, param->grep_line_buf, param->grep_line_len, &bytesWritten, NULL);
+                }
+                param->grep_line_len = 0U;
+            }
+
             ReleaseSRWLockShared(rwLock);
             /* Write format footer (e.g., HTML closing tags) before exiting */
             if (param->conv)
@@ -345,22 +369,48 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
             return 0U;
         }
 
-        if (param->conv)
+        /* Determine data to write (apply grep filter if active) */
+        const BYTE *writeData = g_buffer[myIndex];
+        DWORD writeLen = bytesTotal;
+
+        if (param->grep_utf8)
         {
-            if (!ansi_conv_write(param->conv, g_buffer[myIndex], bytesTotal))
-            {
-                writeErrors = TRUE;
-            }
+            writeLen = grep_filter_buffer(param, g_buffer[myIndex], bytesTotal, filteredBuf, BUFFER_SIZE);
+            writeData = filteredBuf;
         }
-        else
+
+        if (writeLen > 0U)
         {
-            for (DWORD offset = 0U; offset < bytesTotal; offset += bytesWritten)
+            if (param->conv)
             {
-                const BOOL result = WriteFile(param->hOutput, g_buffer[myIndex] + offset, bytesTotal - offset, &bytesWritten, NULL);
-                if ((!result) || (!bytesWritten))
+                if (!ansi_conv_write(param->conv, writeData, writeLen))
                 {
                     writeErrors = TRUE;
-                    break;
+                }
+            }
+            else
+            {
+                for (DWORD offset = 0U; offset < writeLen; offset += bytesWritten)
+                {
+                    const BOOL result = WriteFile(param->hOutput, writeData + offset, writeLen - offset, &bytesWritten, NULL);
+                    if ((!result) || (!bytesWritten))
+                    {
+                        writeErrors = TRUE;
+                        break;
+                    }
+                }
+            }
+
+            /* Check if log rotation is needed */
+            if (param->rotate_size > 0ULL && param->fileName && VALID_HANDLE(param->hOutput))
+            {
+                LARGE_INTEGER fileSize;
+                if (GetFileSizeEx(param->hOutput, &fileSize))
+                {
+                    if ((ULONGLONG)fileSize.QuadPart >= param->rotate_size)
+                    {
+                        rotate_file(param);
+                    }
                 }
             }
         }
@@ -386,12 +436,173 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
 }
 
 // --------------------------------------------------------------------------
+// Size and integer parsing
+// --------------------------------------------------------------------------
+
+static BOOL parse_size(const wchar_t *str, ULONGLONG *result)
+{
+    ULONGLONG val = 0ULL;
+    const wchar_t *p = str;
+
+    while (*p >= L'0' && *p <= L'9')
+    {
+        val = val * 10ULL + (ULONGLONG)(*p - L'0');
+        p++;
+    }
+
+    if (p == str)
+        return FALSE;
+
+    const wchar_t suffix = to_lower(*p);
+    if (suffix == L'k')      { val *= 1024ULL; p++; }
+    else if (suffix == L'm') { val *= 1024ULL * 1024ULL; p++; }
+    else if (suffix == L'g') { val *= 1024ULL * 1024ULL * 1024ULL; p++; }
+    else if (suffix != L'\0') return FALSE;
+
+    if (*p != L'\0' || val == 0ULL)
+        return FALSE;
+
+    *result = val;
+    return TRUE;
+}
+
+static DWORD parse_uint(const wchar_t *str)
+{
+    DWORD val = 0U;
+    if (!str || *str == L'\0')
+        return 0U;
+    while (*str >= L'0' && *str <= L'9')
+    {
+        val = val * 10U + (DWORD)(*str - L'0');
+        str++;
+    }
+    return (*str == L'\0') ? val : 0U;
+}
+
+// --------------------------------------------------------------------------
+// Grep helpers
+// --------------------------------------------------------------------------
+
+static BOOL line_matches(const BYTE *line, DWORD line_len, const char *pattern, int pattern_len)
+{
+    DWORD i;
+    int j;
+
+    if (pattern_len <= 0 || (DWORD)pattern_len > line_len)
+        return FALSE;
+
+    for (i = 0U; i <= line_len - (DWORD)pattern_len; i++)
+    {
+        BOOL match = TRUE;
+        for (j = 0; j < pattern_len; j++)
+        {
+            BYTE a = line[i + (DWORD)j], b = (BYTE)pattern[j];
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            if (a != b) { match = FALSE; break; }
+        }
+        if (match)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static DWORD grep_filter_buffer(thread_t *param, const BYTE *data, DWORD size, BYTE *out_buf, DWORD out_cap)
+{
+    DWORD out_len = 0U, i;
+
+    for (i = 0U; i < size; i++)
+    {
+        if (param->grep_line_len < GREP_LINE_BUF_SIZE)
+            param->grep_line_buf[param->grep_line_len++] = data[i];
+
+        if (data[i] == '\n')
+        {
+            if (line_matches(param->grep_line_buf, param->grep_line_len, param->grep_utf8, param->grep_utf8_len))
+            {
+                const DWORD copy_len = (param->grep_line_len <= out_cap - out_len) ? param->grep_line_len : 0U;
+                if (copy_len > 0U)
+                {
+                    CopyMemory(out_buf + out_len, param->grep_line_buf, copy_len);
+                    out_len += copy_len;
+                }
+            }
+            param->grep_line_len = 0U;
+        }
+    }
+    return out_len;
+}
+
+// --------------------------------------------------------------------------
+// Log rotation helpers
+// --------------------------------------------------------------------------
+
+static wchar_t *format_rotated_name(const wchar_t *baseName, DWORD index)
+{
+    return format_string(L"%1!s!.%2!u!", baseName, index);
+}
+
+static void rotate_file(thread_t *param)
+{
+    DWORD i;
+
+    /* Flush and finalize current file */
+    if (param->conv)
+    {
+        ansi_conv_flush(param->conv);
+        ansi_conv_write_footer(param->conv);
+    }
+
+    CloseHandle(param->hOutput);
+
+    /* Delete the oldest rotated file */
+    {
+        wchar_t *const oldest = format_rotated_name(param->fileName, param->keep_count);
+        if (oldest)
+        {
+            DeleteFileW(oldest);
+            LocalFree(oldest);
+        }
+    }
+
+    /* Shift rotated files: .N-1 -> .N, .N-2 -> .N-1, ..., base -> .1 */
+    for (i = param->keep_count; i >= 1U; --i)
+    {
+        wchar_t *const dst = format_rotated_name(param->fileName, i);
+        wchar_t *const src = (i > 1U) ? format_rotated_name(param->fileName, i - 1U) : NULL;
+        const wchar_t *const srcName = (i == 1U) ? param->fileName : src;
+        if (dst && srcName)
+            MoveFileW(srcName, dst);
+        if (src) LocalFree(src);
+        if (dst) LocalFree(dst);
+    }
+
+    /* Reopen the base file */
+    param->hOutput = CreateFileW(param->fileName, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, CREATE_ALWAYS, 0U, NULL);
+    if (!VALID_HANDLE(param->hOutput))
+    {
+        write_text(param->hError, L"[tee] Error: Failed to reopen file after rotation!\n");
+        return;
+    }
+
+    /* Reset converter for the new file */
+    if (param->conv)
+    {
+        ansi_conv_reset_for_rotation(param->conv, param->hOutput);
+        ansi_conv_write_header(param->conv);
+    }
+}
+
+// --------------------------------------------------------------------------
 // Options
 // --------------------------------------------------------------------------
 
 typedef struct
 {
     BOOL append, buffer, delay, escape, flush, help, html, ignore, linenumber, strip, timestamp, version;
+    ULONGLONG rotate_size;          /* 0 = disabled */
+    DWORD keep_count;               /* rotated files to keep (default 5) */
+    const wchar_t *grep_pattern;    /* wide string pattern, NULL = disabled */
 }
 options_t;
 
@@ -473,7 +684,10 @@ static void print_helpscreen(const HANDLE hStdErr, const BOOL full)
             L"  -s --strip       Strip ANSI escape codes from output file(s)\n"
             L"  -t --timestamp   Add ISO 8601 UTC timestamps to output file(s)\n"
             L"     --html        Convert ANSI escape codes to HTML in output file(s)\n"
-            L"  -d --delay       Add a small delay after each read operation\n\n");
+            L"  -d --delay       Add a small delay after each read operation\n"
+            L"     --grep <pat>  Only write lines matching <pat> to output file(s)\n"
+            L"     --rotate <sz> Rotate output file(s) when they reach <sz> (e.g., 50M)\n"
+            L"     --keep <n>    Keep <n> rotated files (default: 5)\n\n");
     }
     if (versionString)
     {
@@ -494,12 +708,16 @@ int wmain(const int argc, const wchar_t *const argv[])
     PSRWLOCK rwLock = NULL;
     options_t options;
     static thread_t threadData[MAX_THREADS];
+    char *grep_utf8 = NULL;
+    int grep_utf8_len = 0;
+    const wchar_t *fileNames[MAX_THREADS - 1U];
 
     /* Initialize local variables */
     FILL_ARRAY(hMyFiles, INVALID_HANDLE_VALUE);
     FILL_ARRAY(hThreads, NULL);
     SecureZeroMemory(&options, sizeof(options));
     SecureZeroMemory(&threadData, sizeof(threadData));
+    SecureZeroMemory(fileNames, sizeof(fileNames));
 
     /* Initialize standard streams */
     const HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE), hStdOut = GetStdHandle(STD_OUTPUT_HANDLE), hStdErr = GetStdHandle(STD_ERROR_HANDLE);
@@ -534,6 +752,42 @@ int wmain(const int argc, const wchar_t *const argv[])
         {
             break; /*stop!*/
         }
+        else if (lstrcmpiW(argValue, L"--rotate") == 0)
+        {
+            if (argOff >= argc)
+            {
+                write_text(hStdErr, L"[tee] Error: Option --rotate requires a size value (e.g., 50M)\n");
+                return 1;
+            }
+            if (!parse_size(argv[argOff++], &options.rotate_size))
+            {
+                write_text(hStdErr, L"[tee] Error: Invalid size value for --rotate\n");
+                return 1;
+            }
+        }
+        else if (lstrcmpiW(argValue, L"--keep") == 0)
+        {
+            if (argOff >= argc)
+            {
+                write_text(hStdErr, L"[tee] Error: Option --keep requires a numeric value\n");
+                return 1;
+            }
+            options.keep_count = parse_uint(argv[argOff++]);
+            if (options.keep_count == 0U)
+            {
+                write_text(hStdErr, L"[tee] Error: Invalid value for --keep (must be >= 1)\n");
+                return 1;
+            }
+        }
+        else if (lstrcmpiW(argValue, L"--grep") == 0)
+        {
+            if (argOff >= argc)
+            {
+                write_text(hStdErr, L"[tee] Error: Option --grep requires a pattern\n");
+                return 1;
+            }
+            options.grep_pattern = argv[argOff++];
+        }
         else if (!parse_argument(&options, argValue))
         {
             WRITE_TEXT(L"[tee] Error: Invalid option \"", argValue, L"\" encountered!\n");
@@ -553,6 +807,15 @@ int wmain(const int argc, const wchar_t *const argv[])
     {
         write_text(hStdErr, L"[tee] Error: Options --html and --strip are mutually exclusive!\n");
         return 1;
+    }
+
+    /* Default keep count */
+    if (options.rotate_size > 0ULL && options.keep_count == 0U)
+        options.keep_count = 5U;
+
+    if (options.keep_count > 0U && options.rotate_size == 0ULL)
+    {
+        write_text(hStdErr, L"[tee] Warning: --keep is ignored without --rotate\n");
     }
 
     /* Determine output format for files */
@@ -586,6 +849,18 @@ int wmain(const int argc, const wchar_t *const argv[])
         }
     }
 
+    /* Convert grep pattern to UTF-8 */
+    if (options.grep_pattern)
+    {
+        grep_utf8 = utf16_to_utf8(options.grep_pattern);
+        if (!grep_utf8)
+        {
+            write_text(hStdErr, L"[tee] Error: Failed to convert grep pattern to UTF-8!\n");
+            return 1;
+        }
+        grep_utf8_len = lstrlenA(grep_utf8);
+    }
+
     /* Open output file(s) */
     while ((argOff < argc) && (fileCount < ARRAYSIZE(hMyFiles)))
     {
@@ -593,6 +868,7 @@ int wmain(const int argc, const wchar_t *const argv[])
         if (!is_null_device(fileName))
         {
             const HANDLE hFile = CreateFileW(fileName, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, options.append ? OPEN_ALWAYS : CREATE_ALWAYS, 0U, NULL);
+            fileNames[fileCount] = fileName;
             if ((hMyFiles[fileCount++] = hFile) == INVALID_HANDLE_VALUE)
             {
                 WRITE_TEXT(L"[tee] Error: Failed to open the output file \"", fileName, L"\" for writing!\n");
@@ -626,6 +902,26 @@ int wmain(const int argc, const wchar_t *const argv[])
         threadData[threadId].hError = hStdErr;
         threadData[threadId].flush = options.flush && (!is_terminal(threadData[threadId].hOutput));
         threadData[threadId].conv = NULL;
+        /* Set up grep filtering for file outputs only (not stdout) */
+        if ((threadId > 0U) && grep_utf8)
+        {
+            threadData[threadId].grep_utf8 = grep_utf8;
+            threadData[threadId].grep_utf8_len = grep_utf8_len;
+            threadData[threadId].grep_line_buf = (BYTE*)LocalAlloc(LPTR, GREP_LINE_BUF_SIZE);
+            threadData[threadId].grep_line_len = 0U;
+            if (!threadData[threadId].grep_line_buf)
+            {
+                write_text(hStdErr, L"[tee] Error: Failed to allocate grep line buffer!\n");
+                goto cleanUp;
+            }
+        }
+        /* Set up log rotation for file outputs only */
+        if ((threadId > 0U) && options.rotate_size > 0ULL)
+        {
+            threadData[threadId].fileName = (wchar_t*)fileNames[threadId - 1U];
+            threadData[threadId].rotate_size = options.rotate_size;
+            threadData[threadId].keep_count = options.keep_count;
+        }
         /* Create converter for file outputs (not stdout) when processing is needed */
         if ((threadId > 0U) && (outputFormat != FMT_RAW || options.timestamp || options.linenumber))
         {
@@ -760,19 +1056,20 @@ cleanUp:
         }
     }
 
-    /* Flush the output file */
+    /* Flush the output file(s), using thread handles (may differ after rotation) */
     if (options.flush)
     {
-        for (size_t fileIndex = 0U; fileIndex < ARRAYSIZE(hMyFiles); ++fileIndex)
+        for (DWORD threadId = 1U; threadId < outputCount; ++threadId)
         {
-            if (hMyFiles[fileIndex] != INVALID_HANDLE_VALUE)
+            const HANDLE h = threadData[threadId].hOutput;
+            if (VALID_HANDLE(h))
             {
-                FlushFileBuffers(hMyFiles[fileIndex]);
+                FlushFileBuffers(h);
             }
         }
     }
 
-    /* Close worker threads and destroy converters */
+    /* Close worker threads, destroy converters, free grep buffers */
     for (DWORD threadId = 0U; threadId < ARRAYSIZE(hThreads); ++threadId)
     {
         CLOSE_HANDLE(hThreads[threadId]);
@@ -781,12 +1078,31 @@ cleanUp:
             ansi_conv_destroy(threadData[threadId].conv);
             threadData[threadId].conv = NULL;
         }
+        if (threadData[threadId].grep_line_buf)
+        {
+            LocalFree(threadData[threadId].grep_line_buf);
+            threadData[threadId].grep_line_buf = NULL;
+        }
+    }
+
+    /* Update hMyFiles to match current thread handles (may differ after rotation) */
+    for (DWORD threadId = 1U; threadId < ARRAYSIZE(hThreads); ++threadId)
+    {
+        if (threadData[threadId].rotate_size > 0ULL)
+            hMyFiles[threadId - 1U] = threadData[threadId].hOutput;
     }
 
     /* Close the output file(s) */
     for (size_t fileIndex = 0U; fileIndex < ARRAYSIZE(hMyFiles); ++fileIndex)
     {
         CLOSE_HANDLE(hMyFiles[fileIndex]);
+    }
+
+    /* Free grep UTF-8 pattern */
+    if (grep_utf8)
+    {
+        LocalFree(grep_utf8);
+        grep_utf8 = NULL;
     }
 
     /* Exit */

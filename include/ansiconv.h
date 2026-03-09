@@ -51,4 +51,8 @@ BOOL ansi_conv_write_footer(ansi_conv_t *conv);
 /* Flush internal output buffer to the file */
 BOOL ansi_conv_flush(ansi_conv_t *conv);
 
+/* Reset converter state for log rotation (new file handle, reset counters).
+ * Call ansi_conv_write_footer() before and ansi_conv_write_header() after. */
+void ansi_conv_reset_for_rotation(ansi_conv_t *conv, HANDLE hFile);
+
 #endif /* _INC_TEEW32_ANSICONV_H */
