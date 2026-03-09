@@ -23,7 +23,10 @@
 #include "include/cpu.h"
 #include "include/version.h"
 
-#pragma intrinsic(_InterlockedIncrement, _InterlockedDecrement, _InterlockedExchange)
+#pragma intrinsic(_InterlockedIncrement, _InterlockedDecrement, _InterlockedExchange, _InterlockedCompareExchange)
+
+#define ATOMIC_READ(PTR)        _InterlockedCompareExchange((PTR), 0L, 0L)
+#define ATOMIC_WRITE(PTR, VAL)  _InterlockedExchange((PTR), (VAL))
 
 #define BUFFER_SIZE (PROCESSOR_BITNESS * 128U)
 #define BUFFERS 3U
@@ -308,12 +311,12 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
 
         AcquireSRWLockShared(rwLock = &g_rwLocks[myIndex]);
 
-        pending = g_pending[myIndex];
+        pending = ATOMIC_READ(&g_pending[myIndex]);
 
         while (!(myFlag ? (pending > 0L) : (pending < 0L)))
         {
             sleep_condvar_srw(param->hError, &g_condIsReady[myIndex], rwLock, INFINITE, TRUE);
-            pending = g_pending[myIndex];
+            pending = ATOMIC_READ(&g_pending[myIndex]);
         }
 
         const DWORD bytesTotal = g_bytesTotal[myIndex];
@@ -337,7 +340,7 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
             }
         }
 
-        ASSERT(g_pending[myIndex] != 0L, param->hError, L"Pending threads counter must be a non-zero value!");
+        ASSERT(ATOMIC_READ(&g_pending[myIndex]) != 0L, param->hError, L"Pending threads counter must be a non-zero value!");
 
         pending = myFlag ? _InterlockedDecrement(&g_pending[myIndex]) : _InterlockedIncrement(&g_pending[myIndex]);
 
@@ -596,7 +599,7 @@ int wmain(const int argc, const wchar_t *const argv[])
 
         AcquireSRWLockExclusive(rwLock = &g_rwLocks[myIndex]);
 
-        while (g_pending[myIndex])
+        while (ATOMIC_READ(&g_pending[myIndex]))
         {
             sleep_condvar_srw(hStdErr, &g_condAllDone[myIndex], rwLock, INFINITE, FALSE);
         }
@@ -626,7 +629,7 @@ int wmain(const int argc, const wchar_t *const argv[])
         }
 
         g_bytesTotal[myIndex] = totalBytes;
-        g_pending[myIndex] = myFlag ? ((LONG)threadCount) : (-((LONG)threadCount));
+        ATOMIC_WRITE(&g_pending[myIndex], myFlag ? ((LONG)threadCount) : (-((LONG)threadCount)));
 
         ReleaseSRWLockExclusive(&g_rwLocks[myIndex]);
         WakeAllConditionVariable(&g_condIsReady[myIndex]);
@@ -658,14 +661,14 @@ cleanUp:
 
     /* Wait for the pending writes */
     AcquireSRWLockExclusive(&g_rwLocks[myIndex]);
-    while (g_pending[myIndex])
+    while (ATOMIC_READ(&g_pending[myIndex]))
     {
         sleep_condvar_srw(hStdErr, &g_condAllDone[myIndex], &g_rwLocks[myIndex], 25000U, FALSE);
     }
 
     /* Shut down the remaining worker threads */
     g_bytesTotal[myIndex] = MAXDWORD;
-    g_pending[myIndex] = myFlag ? MAXLONG : MINLONG;
+    ATOMIC_WRITE(&g_pending[myIndex], myFlag ? MAXLONG : MINLONG);
     ReleaseSRWLockExclusive(&g_rwLocks[myIndex]);
     WakeAllConditionVariable(&g_condIsReady[myIndex]);
 
