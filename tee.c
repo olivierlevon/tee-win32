@@ -689,7 +689,7 @@ cleanUp:
         WakeAllConditionVariable(&g_condIsReady[bufIdx]);
     }
 
-    /* Wait for worker threads to exit */
+    /* Wait for worker threads to exit (cooperative shutdown) */
     const DWORD pendingThreads = count_handles(hThreads, ARRAYSIZE(hThreads));
     if (pendingThreads > 0U)
     {
@@ -700,8 +700,7 @@ cleanUp:
             {
                 if (WaitForSingleObject(hThreads[threadId], 125U) != WAIT_OBJECT_0)
                 {
-                    write_text(hStdErr, L"[tee] Internal error: Worker thread did not exit cleanly!\n");
-                    TerminateThread(hThreads[threadId], 1U);
+                    write_text(hStdErr, L"[tee] Warning: Worker thread did not exit cleanly!\n");
                 }
             }
         }
