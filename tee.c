@@ -38,7 +38,7 @@
     static const wchar_t *const _message = L"[tee] Assertion Failed: " MESSAGE L"\n"; \
     if (!(CONDITION)) { \
         write_text((HANDLE_OUT), _message); \
-        FatalExit(-1); \
+        __debugbreak(); \
     } \
 } while(0)
 #else
