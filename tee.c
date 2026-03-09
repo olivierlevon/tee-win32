@@ -659,18 +659,35 @@ int wmain(const int argc, const wchar_t *const argv[])
 
 cleanUp:
 
-    /* Wait for the pending writes */
+    /* Wait for the pending writes on the current buffer */
     AcquireSRWLockExclusive(&g_rwLocks[myIndex]);
     while (ATOMIC_READ(&g_pending[myIndex]))
     {
         sleep_condvar_srw(hStdErr, &g_condAllDone[myIndex], &g_rwLocks[myIndex], 25000U, FALSE);
     }
-
-    /* Shut down the remaining worker threads */
-    g_bytesTotal[myIndex] = MAXDWORD;
-    ATOMIC_WRITE(&g_pending[myIndex], myFlag ? MAXLONG : MINLONG);
     ReleaseSRWLockExclusive(&g_rwLocks[myIndex]);
-    WakeAllConditionVariable(&g_condIsReady[myIndex]);
+
+    /* Shut down all worker threads: signal termination on ALL buffers */
+    for (DWORD bufIdx = 0U; bufIdx < BUFFERS; ++bufIdx)
+    {
+        BOOL bufFlag = myFlag;
+        if (bufIdx != myIndex)
+        {
+            /* Compute the correct flag polarity for each buffer index */
+            DWORD tmpIdx = myIndex;
+            BOOL tmpFlag = myFlag;
+            while (tmpIdx != bufIdx)
+            {
+                INCREMENT_INDEX(tmpIdx, tmpFlag);
+            }
+            bufFlag = tmpFlag;
+        }
+        AcquireSRWLockExclusive(&g_rwLocks[bufIdx]);
+        g_bytesTotal[bufIdx] = MAXDWORD;
+        ATOMIC_WRITE(&g_pending[bufIdx], bufFlag ? MAXLONG : MINLONG);
+        ReleaseSRWLockExclusive(&g_rwLocks[bufIdx]);
+        WakeAllConditionVariable(&g_condIsReady[bufIdx]);
+    }
 
     /* Wait for worker threads to exit */
     const DWORD pendingThreads = count_handles(hThreads, ARRAYSIZE(hThreads));
