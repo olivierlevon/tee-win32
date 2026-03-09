@@ -10,6 +10,11 @@
 - [Command-Line Options](#command-line-options)
 - [Input and Output Data Format](#input-and-output-data-format)
 - [ANSI Escape Code Support](#ansi-escape-code-support)
+  - [Console Rendering](#console-rendering--e----escape)
+  - [ANSI-to-HTML Conversion](#ansi-to-html-conversion)
+  - [ANSI Code Stripping](#ansi-code-stripping)
+  - [Converter Architecture](#converter-architecture)
+  - [Combining Options](#combining-options)
 - [Multi-Threaded Architecture](#multi-threaded-architecture)
 - [Buffering and Write Combining](#buffering-and-write-combining)
 - [Signal Handling (CTRL+C)](#signal-handling-ctrlc)
@@ -115,7 +120,9 @@ Options can be specified as short flags (`-a`), long flags (`--append`), or comb
 | `-e` | `--escape` | **ANSI escape code processing.** Enables Virtual Terminal Processing on stdout by setting `ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING` on the console mode. This allows ANSI/VT100 escape sequences (colors, cursor movement, etc.) to be interpreted and rendered by the Windows console. See [ANSI Escape Code Support](#ansi-escape-code-support). |
 | `-f` | `--flush` | **Flush after write.** Forces `FlushFileBuffers` on each output file after every write operation. Ensures data is physically committed to disk immediately, which is critical for real-time log monitoring but reduces throughput. Does not flush terminal handles (detected and skipped automatically). |
 | `-h` | `--help` | **Help.** Displays the full help screen with version info and usage instructions, then exits. |
+| | `--html` | **HTML conversion.** Converts ANSI escape codes in output files to HTML with inline CSS styling. The output is a self-contained HTML document with a dark terminal-style background, monospace font, and `<span>` tags for colors and text attributes. Stdout is not affected (raw passthrough). Mutually exclusive with `--strip`. See [ANSI-to-HTML Conversion](#ansi-to-html-conversion). |
 | `-i` | `--ignore` | **Ignore interrupt.** Ignores CTRL+C / CTRL+Break / Console Close signals. The program continues reading and writing even when the user presses CTRL+C. Without this flag, CTRL+C causes a graceful shutdown. |
+| `-s` | `--strip` | **Strip ANSI codes.** Removes all ANSI escape sequences from the output files, producing clean plain text. Stdout is not affected (raw passthrough). Mutually exclusive with `--html`. See [ANSI Code Stripping](#ansi-code-stripping). |
 | `-v` | `--version` | **Version.** Displays the version string only, then exits. |
 
 ### Option Parsing Rules
@@ -148,7 +155,11 @@ For `tee` to work correctly in a pipeline, the upstream program (the one piping 
 
 ### Output File Format
 
-Output files contain the exact byte stream received from stdin. No headers, footers, timestamps, or metadata are added. The files are a byte-for-byte copy of the data that also went to stdout.
+By default, output files contain the exact byte stream received from stdin. No headers, footers, timestamps, or metadata are added. The files are a byte-for-byte copy of the data that also went to stdout.
+
+When `--html` is specified, output files are self-contained HTML documents with a header (DOCTYPE, `<html>`, `<head>`, CSS stylesheet, `<body>`, `<pre>`) and footer (`</pre>`, `</body>`, `</html>`). ANSI escape codes are converted to inline CSS `<span>` tags.
+
+When `-s` / `--strip` is specified, output files contain only the text content with all ANSI escape sequences removed. The result is clean plain text without any color codes or cursor control sequences.
 
 ## ANSI Escape Code Support
 
@@ -158,7 +169,9 @@ Many modern CLI tools output ANSI escape codes for colored text, progress bars, 
 
 When a program's output is piped through `tee`, the stdout handle may lose its console mode flags because it is now a pipe rather than a direct console handle. This means ANSI codes may not be rendered as colors but instead appear as raw escape characters (e.g., `←[31m`).
 
-### The Solution: `-e` / `--escape`
+Additionally, the raw escape codes stored in output files are unreadable by most text editors and web browsers, making it difficult to archive or share colored terminal output.
+
+### Console Rendering: `-e` / `--escape`
 
 When the `-e` flag is specified:
 1. The program calls `GetConsoleMode(hStdOut, ...)` to check if stdout is a console.
@@ -166,19 +179,144 @@ When the `-e` flag is specified:
 3. This enables the console to interpret ANSI escape sequences in the data being written to stdout.
 
 **Important notes:**
-- This flag only affects **stdout console rendering**. The raw escape codes are always written verbatim to the output files regardless of this flag.
+- This flag only affects **stdout console rendering**. The raw escape codes are always written verbatim to the output files unless `--html` or `--strip` is also specified.
 - If stdout is not a console (e.g., piped to another program), the flag has no effect.
 - This flag is only meaningful on **Windows 10 version 1511** or later, which introduced Virtual Terminal Processing support.
 
-### Example
+### ANSI-to-HTML Conversion
+
+The `--html` option converts ANSI escape codes in output files to a self-contained HTML document. This is useful for archiving colored terminal output, sharing it via the web, or viewing it in any browser.
+
+#### Generated HTML Structure
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>tee output</title>
+<style>
+body { margin:0; padding:1em; background:#000; color:#aaa; }
+pre  { font-family:Consolas,'Courier New',monospace; font-size:14px;
+       white-space:pre-wrap; word-wrap:break-word; }
+</style>
+</head>
+<body>
+<pre>
+...converted content with <span> tags...
+</pre>
+</body>
+</html>
+```
+
+#### Supported SGR Attributes
+
+The converter implements a **streaming state machine** that parses ANSI escape sequences byte-by-byte, maintaining state across buffer boundaries. The following SGR (Select Graphic Rendition) attributes are mapped to CSS:
+
+| SGR Code | Attribute | CSS Property |
+|---|---|---|
+| `0` | Reset all | Closes current `<span>` |
+| `1` | Bold | `font-weight:bold` |
+| `2` | Faint/dim | `opacity:0.5` |
+| `3` | Italic | `font-style:italic` |
+| `4`, `21` | Underline | `text-decoration:underline` |
+| `7` | Reverse video | Swaps foreground and background colors |
+| `8` | Concealed | `visibility:hidden` |
+| `22` | Normal intensity | Resets bold and faint |
+| `23`-`28` | Reset italic, underline, blink, reverse, concealed | Corresponding CSS reset |
+
+#### Supported Color Modes
+
+| Color Mode | SGR Codes | Range | Example |
+|---|---|---|---|
+| **Standard colors** | `30`-`37` (fg), `40`-`47` (bg) | 8 colors | `ESC[31m` = red text |
+| **Bright colors** | `90`-`97` (fg), `100`-`107` (bg) | 8 colors | `ESC[91m` = bright red text |
+| **256-color palette** | `38;5;N` (fg), `48;5;N` (bg) | 0-255 | `ESC[38;5;208m` = orange text |
+| **24-bit truecolor** | `38;2;R;G;B` (fg), `48;2;R;G;B` (bg) | 16M colors | `ESC[38;2;255;128;0m` = orange text |
+
+The 256-color palette maps:
+- **0-7**: Standard ANSI colors (CGA palette)
+- **8-15**: Bright ANSI colors
+- **16-231**: 6×6×6 color cube (components: 0x00, 0x5F, 0x87, 0xAF, 0xD7, 0xFF)
+- **232-255**: 24-step grayscale ramp (0x08 to 0xEE, step 10)
+
+When bold is active and the foreground is a standard color (0-7), the color is automatically promoted to its bright variant (8-15), matching terminal behavior.
+
+#### HTML Font Stack
+
+The generated HTML uses a monospace font stack designed for cross-platform readability:
+
+```css
+font-family: Consolas, 'Courier New', monospace;
+```
+
+- **Consolas**: Primary choice, available on all modern Windows systems. Excellent readability for terminal output.
+- **Courier New**: Fallback for older systems or non-Windows platforms.
+- **monospace**: Generic fallback for any environment.
+
+#### Escape Sequences Handled
+
+| Sequence | Type | Action |
+|---|---|---|
+| `ESC [ ... m` | CSI SGR | Parsed and converted to `<span>` tags |
+| `ESC [ ... <other>` | CSI (non-SGR) | Silently discarded (cursor moves, erase, etc.) |
+| `ESC ] ... BEL` | OSC (BEL-terminated) | Silently discarded (window title, hyperlinks, etc.) |
+| `ESC ] ... ESC \` | OSC (ST-terminated) | Silently discarded |
+| `ESC <char>` | Two-byte sequences | Silently discarded |
+| `0x9B ...` | Single-byte CSI (C1) | Parsed identically to `ESC [` |
+
+HTML special characters (`<`, `>`, `&`, `"`) are properly escaped. Carriage return characters (`\r`) are stripped; line feeds (`\n`) are preserved (rendered correctly within `<pre>`).
+
+#### Example
 
 ```cmd
-REM Without -e: colors may not render in the console
-colored-tool.exe | tee.exe output.log
-
-REM With -e: colors render correctly in the console, and raw codes are saved in the file
-colored-tool.exe | tee.exe -e output.log
+colored-linter.exe | tee.exe -e --html lint_results.html
 ```
+
+This produces a browsable HTML file with full color rendering, while the console also displays colors (thanks to `-e`).
+
+### ANSI Code Stripping
+
+The `-s` / `--strip` option removes all ANSI escape sequences from the output files, producing clean plain text. This is useful when:
+
+- You need to process the output with tools that don't understand ANSI codes (e.g., `findstr`, `grep`, text editors).
+- You want to archive log output without visual clutter from color codes.
+- You're feeding the output to another program that would choke on escape sequences.
+
+The strip mode uses the same streaming state machine as the HTML converter but simply discards all escape sequences and passes only the raw text bytes through.
+
+#### Example
+
+```cmd
+REM Save clean text to file, but keep colors in console
+colored-tool.exe | tee.exe -es output.txt
+
+REM Multiple files: all files get stripped output
+colored-tool.exe | tee.exe -s log1.txt log2.txt
+```
+
+### Converter Architecture
+
+The ANSI converter (`ansiconv.c`) is implemented as a self-contained, streaming, stateful parser with zero CRT dependency:
+
+- **Per-file state**: Each output file gets its own converter instance with independent parser state. This means escape sequences split across buffer boundaries are handled correctly.
+- **32 KB output buffer**: Converted output is buffered internally and flushed to the file handle via `WriteFile` when the buffer fills or after each input chunk is processed.
+- **Memory**: Each converter instance is allocated via `LocalAlloc` (~32 KB). No dynamic resizing or CRT heap usage.
+- **Thread safety**: Each writer thread owns its converter exclusively; no shared mutable state between converters.
+- **Stdout passthrough**: Stdout is never converted. The converter only applies to file output threads, ensuring the console always receives raw data (which is then rendered by the terminal if `-e` is used).
+
+### Combining Options
+
+The `-e`, `--html`, and `-s` options serve complementary purposes and can be combined:
+
+| Options | Console (stdout) | Output Files |
+|---|---|---|
+| *(none)* | Raw bytes | Raw bytes |
+| `-e` | ANSI rendered by terminal | Raw bytes (including escape codes) |
+| `-s` | Raw bytes | Plain text (escape codes stripped) |
+| `--html` | Raw bytes | HTML with CSS colors |
+| `-e -s` | ANSI rendered by terminal | Plain text (escape codes stripped) |
+| `-e --html` | ANSI rendered by terminal | HTML with CSS colors |
 
 ## Multi-Threaded Architecture
 
@@ -296,7 +434,7 @@ In Debug builds (`_DEBUG` defined), the standard CRT startup is used, which prov
 
 ### Build Tool
 
-The project uses **Visual Studio 2022** with the **v143 platform toolset**. It is a pure C project (single source file `tee.c`) with a Visual Studio solution (`tee.sln`) and project file (`tee.vcxproj`).
+The project uses **Visual Studio 2022** with the **v143 platform toolset**. It is a pure C project with two source files (`tee.c` and `ansiconv.c`) and a Visual Studio solution (`tee.sln`) and project file (`tee.vcxproj`).
 
 ### Build Configurations
 
@@ -333,7 +471,7 @@ The project includes a GitHub Actions workflow (`.github/workflows/build.yml`) t
 1. **Windows only**: There is no support for Linux, macOS, or any other operating system. The program is built entirely on Win32 APIs.
 2. **No stdin from console**: The program is designed for pipe usage. It reads from stdin, which must be redirected from another program or a file. It does not provide an interactive mode where you type input directly.
 3. **No output to stdout suppression**: Unlike some `tee` implementations, there is no option to write only to files and suppress stdout output. Data always goes to stdout.
-4. **No timestamps or formatting**: The program does not add timestamps, line numbers, or any other formatting to the output. It is a pure byte-stream duplicator.
+4. **No timestamps or line numbers**: The program does not add timestamps or line numbers to the output. However, ANSI-to-HTML conversion and ANSI stripping are available via `--html` and `-s`/`--strip`.
 5. **Maximum 63 output files**: Limited by `MAXIMUM_WAIT_OBJECTS` (64) minus 1 for the stdout writer thread.
 6. **No stderr capture**: Only stdout from the upstream program is captured. To include stderr, use shell redirection (`2>&1`) before the pipe.
 7. **No regex filtering or line selection**: Unlike `grep` or `sed`, `tee` passes all data through unmodified. Filtering must be done by other tools in the pipeline.
@@ -387,6 +525,30 @@ colored-linter.exe | tee.exe -e lint_results.txt
 ```
 
 The `-e` flag ensures ANSI colors render in the console. The raw escape codes are saved in `lint_results.txt` for later viewing in a compatible viewer.
+
+### Save colored output as HTML
+
+```cmd
+colored-linter.exe | tee.exe -e --html lint_results.html
+```
+
+ANSI colors render in the console (via `-e`) and the output file is a self-contained HTML document with CSS-styled colors. Open `lint_results.html` in any browser to see the colored output.
+
+### Archive clean log output (strip ANSI codes)
+
+```cmd
+colored-tool.exe | tee.exe -es clean_output.txt
+```
+
+The console shows full colors (via `-e`), but the file contains clean plain text with all escape codes removed. Ideal for `grep`, `findstr`, or text editors that don't understand ANSI codes.
+
+### Multiple files with HTML conversion
+
+```cmd
+ci-build.exe 2>&1 | tee.exe -e --html build_report.html build_report_backup.html
+```
+
+Both output files receive the HTML-formatted version. The console shows live colored output.
 
 ### Speed up slow terminal output
 
