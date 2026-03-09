@@ -139,7 +139,7 @@ Options can be specified as short flags (`-a`), long flags (`--append`), or comb
 | `-s` | `--strip` | **Strip ANSI codes.** Removes all ANSI escape sequences from the output files, producing clean plain text. Stdout is not affected (raw passthrough). Mutually exclusive with `--html`. See [ANSI Code Stripping](#ansi-code-stripping). |
 | `-t` | `--timestamp` | **Timestamps.** Prepends an ISO 8601 UTC timestamp to each line in the output files. Format: `[YYYY-MM-DDThh:mm:ss.mmmZ]`. Stdout is not affected (raw passthrough). See [Line Decoration](#line-decoration-timestamps-and-line-numbers). |
 | `-v` | `--version` | **Version.** Displays the version string only, then exits. |
-| | `--grep <pat>` | **Grep filter.** Only write lines containing the substring `<pat>` (case-insensitive) to output files. Stdout always receives all data unfiltered. See [Line Filtering: Grep](#line-filtering-grep). |
+| | `--grep <pat>` | **Grep filter.** Only write lines matching the regular expression `<pat>` (case-insensitive, PCRE2 syntax) to output files. Stdout always receives all data unfiltered. See [Line Filtering: Grep](#line-filtering-grep). |
 | | `--rotate <sz>` | **Log rotation.** When an output file reaches `<sz>` bytes, rotate it (rename to `.1`, shift older files, create new empty file). Supports `K`, `M`, `G` suffixes. See [Log Rotation](#log-rotation). |
 | | `--keep <n>` | **Rotation keep count.** Keep `<n>` rotated files (default: 5). Oldest files beyond `<n>` are deleted. Only meaningful with `--rotate`. |
 
@@ -150,7 +150,7 @@ Options can be specified as short flags (`-a`), long flags (`--append`), or comb
 - A single `-` alone is treated as a file name, not an option.
 - Unknown options cause an error and the program exits immediately.
 - Short options can be combined: `-abf` is equivalent to `-a -b -f`.
-- Options are case-insensitive (e.g., `-A` is the same as `-a`), using Unicode-aware lowercasing via `CharLowerBuffW`.
+- Options are case-insensitive (e.g., `-A` is the same as `-a`), using ASCII case folding.
 
 ## Input and Output Data Format
 
@@ -429,28 +429,39 @@ Console shows colors, HTML file has colored output with line numbers.
 
 ## Line Filtering: Grep
 
-The `--grep <pattern>` option filters output so that **only lines containing the given substring** are written to the output files. This is useful for extracting specific information (errors, warnings, status messages) from a verbose output stream while still seeing everything in the console.
+The `--grep <pattern>` option filters output so that **only lines matching the given regular expression** are written to the output files. This is useful for extracting specific information (errors, warnings, status messages) from a verbose output stream while still seeing everything in the console.
 
 **Key behavior:**
 - Stdout (console) always receives **all data unfiltered** -- the grep filter only applies to file outputs.
-- Matching is **case-insensitive** for ASCII characters (A-Z / a-z).
-- The match is a **substring search** -- the pattern can appear anywhere in the line.
+- Patterns use **PCRE2 regular expression syntax** (Perl-compatible).
+- Matching is **case-insensitive** by default (the `PCRE2_CASELESS` flag is set).
+- A line matches if the pattern is found **anywhere** in the line (partial match, not anchored).
 - Lines are delimited by `\n` (line feed). Partial lines at end-of-stream are also checked.
-- Each output file thread maintains its own line accumulation buffer (64 KB), so lines split across buffer boundaries are handled correctly.
+- Each output file thread maintains its own line accumulation buffer (64 KB) and its own PCRE2 match data for thread safety.
+- Invalid regex patterns are detected at startup with a clear error message.
 
 ### Pattern Matching
 
-The pattern is specified as a UTF-16 command-line argument, converted internally to UTF-8 for byte-level matching against the data stream. This means patterns work correctly with ASCII and UTF-8 encoded text. The case folding is ASCII-only (A-Z ↔ a-z), which covers the vast majority of use cases (log levels, error codes, function names).
+The pattern is specified as a command-line argument, converted to UTF-8 at startup, and compiled by the PCRE2 library. The full PCRE2 regex syntax is available, including:
+
+- **Alternation**: `error|warning|fatal` matches any of the three words
+- **Character classes**: `[Ee]rror` matches `Error` or `error`
+- **Quantifiers**: `warn(ing)?` matches `warn` or `warning`
+- **Anchors**: `^ERROR` matches only lines starting with `ERROR`
+- **Wildcards**: `err.*found` matches `error: file not found`
+- **Escape sequences**: `\d+` matches one or more digits
 
 Examples of pattern matching:
 
 | Pattern | Line | Match? |
 |---|---|---|
 | `error` | `[ERROR] File not found` | Yes (case-insensitive) |
-| `error` | `No errors detected` | Yes (`error` is a substring of `errors`) |
-| `WARN` | `WARNING: disk space low` | Yes |
+| `error` | `No errors detected` | Yes (partial match) |
+| `^ERROR` | `[ERROR] File not found` | No (line doesn't start with ERROR) |
+| `^\\[ERROR\\]` | `[ERROR] File not found` | Yes (escaped brackets, anchored) |
+| `error\|warn` | `WARNING: disk space low` | Yes (alternation) |
 | `fatal` | `INFO: all good` | No |
-| `build` | `Rebuilding index...` | Yes (`build` found inside `Rebuilding`) |
+| `\d{3,}` | `Error code 4567` | Yes (3+ digits) |
 
 ### Grep with Other Options
 
@@ -711,28 +722,36 @@ In **Release** builds, the program completely bypasses the C Runtime Library (CR
 
 1. Calls `SetErrorMode(SEM_FAILCRITICALERRORS)` to suppress system error dialog boxes.
 2. Parses the command line using `CommandLineToArgvW(GetCommandLineW(), ...)`.
-3. Calls `wmain(argc, argv)` directly.
-4. Calls `ExitProcess()` with the return value.
+3. Converts all arguments from UTF-16 to UTF-8 using `WideCharToMultiByte(CP_UTF8, ...)`.
+4. Calls `tee_main(argc, argv_utf8)` with the UTF-8 argument array.
+5. Frees the UTF-8 arguments and calls `ExitProcess()` with the return value.
+
+The program also provides CRT intrinsic stubs (`memset`, `memcpy`, `memmove`, `strlen`) required by the statically linked PCRE2 library when building without CRT.
 
 ### Benefits
 
-- **Zero CRT dependency**: The Release binary only links against `kernel32.lib` and `Shell32.lib`. No CRT DLLs are needed at runtime.
-- **Minimal binary size**: The executable is extremely small since it doesn't pull in CRT initialization code, locale support, stdio buffering, etc.
+- **Zero CRT dependency**: The Release binary only links against `kernel32.lib`, `Shell32.lib`, and `pcre2-8-static.lib`. No CRT DLLs are needed at runtime.
+- **Minimal binary size**: The executable is small since it doesn't pull in CRT initialization code, locale support, stdio buffering, etc.
 - **Faster startup**: No CRT initialization overhead (heap setup, locale initialization, atexit registration, etc.).
 - **No runtime library version conflicts**: The binary works on any supported Windows version without needing a specific Visual C++ Redistributable installed.
+- **UTF-8 throughout**: All command-line arguments (options, patterns, file names) are converted to UTF-8 once at startup, eliminating repeated conversions and simplifying the main code.
 
 ### Debug Builds
 
 In Debug builds (`_DEBUG` defined), the standard CRT startup is used, which provides:
 - AddressSanitizer (ASAN) support (enabled in the project for x86 and x64 Debug builds).
 - Standard debug heap with leak detection.
-- Standard `wmain` entry point.
+- Standard `wmain` entry point (which wraps to `tee_main` with UTF-8 conversion).
 
 ## Build System and CI/CD
 
 ### Build Tool
 
 The project uses **Visual Studio 2022** with the **v143 platform toolset**. It is a pure C project with two source files (`tee.c` and `ansiconv.c`) and a Visual Studio solution (`tee.sln`) and project file (`tee.vcxproj`).
+
+### Dependencies
+
+- **PCRE2** (Perl-Compatible Regular Expressions): Statically linked, 8-bit only. Built without JIT and without Unicode tables to minimize size and avoid CRT dependencies. Custom memory allocators (`LocalAlloc`/`LocalFree`) are provided via `pcre2_general_context_create()`. The PCRE2 source should be placed in `deps/pcre2/` and built using `build_pcre2.bat` (or automatically by the CI workflow).
 
 ### Build Configurations
 
@@ -754,7 +773,9 @@ Release builds enable:
 
 ### GitHub Actions CI
 
-The project includes a GitHub Actions workflow (`.github/workflows/build.yml`) that builds all 6 combinations (3 platforms x 2 configurations) on every push and pull request to `master`. Release binaries are uploaded as build artifacts.
+The project includes a GitHub Actions workflow (`.github/workflows/build.yml`) that builds all 6 combinations (3 platforms x 2 configurations) on every push and pull request to `master`. The workflow automatically clones PCRE2, builds the static library for the target platform/configuration, and then builds the project. Release binaries are uploaded as build artifacts.
+
+For local builds, run `build_pcre2.bat` first to compile PCRE2 for all platforms, then open `tee.sln` in Visual Studio.
 
 ## Exit Codes
 
@@ -772,7 +793,7 @@ The project includes a GitHub Actions workflow (`.github/workflows/build.yml`) t
 4. **No custom timestamp format**: Timestamps use a fixed ISO 8601 UTC format (`[YYYY-MM-DDThh:mm:ss.mmmZ]`). Local time or custom formats are not supported.
 5. **Maximum 63 output files**: Limited by `MAXIMUM_WAIT_OBJECTS` (64) minus 1 for the stdout writer thread.
 6. **No stderr capture**: Only stdout from the upstream program is captured. To include stderr, use shell redirection (`2>&1`) before the pipe.
-7. **Substring grep only**: The `--grep` filter performs case-insensitive ASCII substring matching. Full regular expressions, inverted matching (`-v`), and per-file patterns are not supported. For advanced filtering, pipe through `findstr` or `grep` in addition to `tee`.
+7. **Grep limitations**: The `--grep` filter uses PCRE2 regular expressions with case-insensitive matching. Inverted matching (`-v`) and per-file patterns are not supported. The same pattern applies to all output files.
 
 ## Examples
 
@@ -931,7 +952,7 @@ Console shows full colored output (`-e`). `test_failures.txt` gets only failing 
 ### Filter to HTML report
 
 ```cmd
-ci-build.exe 2>&1 | tee.exe --grep "warning\|error" -e --html issues.html
+ci-build.exe 2>&1 | tee.exe --grep "warning|error" -e --html issues.html
 ```
 
 Console renders colors. `issues.html` is a browsable HTML file containing only warning/error lines with full color rendering.

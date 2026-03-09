@@ -26,7 +26,7 @@ Options:
   -t --timestamp   Add ISO 8601 UTC timestamps to output file(s)
      --html        Convert ANSI escape codes to HTML in output file(s)
   -d --delay       Add a small delay after each read operation
-     --grep <pat>  Only write lines matching <pat> to output file(s)
+     --grep <pat>  Only write lines matching regex <pat> to output file(s)
      --rotate <sz> Rotate output file(s) when they reach <sz> (e.g., 50M)
      --keep <n>    Keep <n> rotated files (default: 5)
 ```
