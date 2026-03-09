@@ -31,8 +31,10 @@ typedef enum {
 /* Opaque converter state */
 typedef struct _ansi_conv ansi_conv_t;
 
-/* Create a new converter for the given format and output file handle */
-ansi_conv_t *ansi_conv_create(output_format_t format, HANDLE hFile);
+/* Create a new converter for the given format and output file handle.
+ * timestamp: if TRUE, prepend ISO 8601 UTC timestamp to each line
+ * linenumber: if TRUE, prepend line number to each line (64-bit counter) */
+ansi_conv_t *ansi_conv_create(output_format_t format, HANDLE hFile, BOOL timestamp, BOOL linenumber);
 
 /* Destroy a converter and free its memory */
 void ansi_conv_destroy(ansi_conv_t *conv);

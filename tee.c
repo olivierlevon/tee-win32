@@ -391,7 +391,7 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
 
 typedef struct
 {
-    BOOL append, buffer, delay, escape, flush, help, html, ignore, strip, version;
+    BOOL append, buffer, delay, escape, flush, help, html, ignore, linenumber, strip, timestamp, version;
 }
 options_t;
 
@@ -417,7 +417,9 @@ static BOOL parse_option(options_t *const options, const wchar_t c, const wchar_
     PARSE_OPTION('h', help);
     PARSE_OPTION('\0', html);
     PARSE_OPTION('i', ignore);
+    PARSE_OPTION('n', linenumber);
     PARSE_OPTION('s', strip);
+    PARSE_OPTION('t', timestamp);
     PARSE_OPTION('v', version);
 
     return FALSE;
@@ -462,14 +464,16 @@ static void print_helpscreen(const HANDLE hStdErr, const BOOL full)
             L"Usage:\n"
             L"  gizmo.exe [...] | tee.exe [options] <file_1> ... <file_n>\n\n"
             L"Options:\n"
-            L"  -a --append  Append to the existing file, instead of truncating\n"
-            L"  -b --buffer  Enable write combining, i.e. buffer small chunks\n"
-            L"  -e --escape  Enable standard output ANSI escape code processing\n"
-            L"  -f --flush   Flush output file after each write operation\n"
-            L"  -i --ignore  Ignore the interrupt signal (SIGINT), e.g. CTRL+C\n"
-            L"  -s --strip   Strip ANSI escape codes from output file(s)\n"
-            L"     --html    Convert ANSI escape codes to HTML in output file(s)\n"
-            L"  -d --delay   Add a small delay after each read operation\n\n");
+            L"  -a --append      Append to the existing file, instead of truncating\n"
+            L"  -b --buffer      Enable write combining, i.e. buffer small chunks\n"
+            L"  -e --escape      Enable standard output ANSI escape code processing\n"
+            L"  -f --flush       Flush output file after each write operation\n"
+            L"  -i --ignore      Ignore the interrupt signal (SIGINT), e.g. CTRL+C\n"
+            L"  -n --linenumber  Add line numbers to output file(s)\n"
+            L"  -s --strip       Strip ANSI escape codes from output file(s)\n"
+            L"  -t --timestamp   Add ISO 8601 UTC timestamps to output file(s)\n"
+            L"     --html        Convert ANSI escape codes to HTML in output file(s)\n"
+            L"  -d --delay       Add a small delay after each read operation\n\n");
     }
     if (versionString)
     {
@@ -622,10 +626,10 @@ int wmain(const int argc, const wchar_t *const argv[])
         threadData[threadId].hError = hStdErr;
         threadData[threadId].flush = options.flush && (!is_terminal(threadData[threadId].hOutput));
         threadData[threadId].conv = NULL;
-        /* Create ANSI converter for file outputs (not stdout) */
-        if ((threadId > 0U) && (outputFormat != FMT_RAW))
+        /* Create converter for file outputs (not stdout) when processing is needed */
+        if ((threadId > 0U) && (outputFormat != FMT_RAW || options.timestamp || options.linenumber))
         {
-            threadData[threadId].conv = ansi_conv_create(outputFormat, threadData[threadId].hOutput);
+            threadData[threadId].conv = ansi_conv_create(outputFormat, threadData[threadId].hOutput, options.timestamp, options.linenumber);
             if (!threadData[threadId].conv)
             {
                 write_text(hStdErr, L"[tee] Error: Failed to create ANSI converter!\n");

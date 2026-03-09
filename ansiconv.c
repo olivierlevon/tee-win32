@@ -84,6 +84,10 @@ struct _ansi_conv {
     int param_len;
     BOOL span_open;
     BOOL has_error;
+    BOOL timestamp;
+    BOOL linenumber;
+    BOOL at_line_start;
+    ULONGLONG line_count;
     text_style_t style;
     DWORD out_pos;
     char params[CSI_PARAMS_MAX];
@@ -311,6 +315,87 @@ static void html_output_char(ansi_conv_t *conv, BYTE c)
 }
 
 /* ========================================================================== */
+/* Line prefix helpers (timestamp + line number)                              */
+/* ========================================================================== */
+
+static void out_u64(ansi_conv_t *conv, ULONGLONG val)
+{
+    char tmp[21]; /* max 20 digits for ULONGLONG + sentinel */
+    int len = 0;
+    if (val == 0ULL)
+    {
+        out_byte(conv, '0');
+        return;
+    }
+    while (val > 0ULL)
+    {
+        tmp[len++] = '0' + (char)(val % 10ULL);
+        val /= 10ULL;
+    }
+    while (len > 0)
+        out_byte(conv, (BYTE)tmp[--len]);
+}
+
+static void out_2digits(ansi_conv_t *conv, WORD val)
+{
+    out_byte(conv, (BYTE)('0' + (val / 10)));
+    out_byte(conv, (BYTE)('0' + (val % 10)));
+}
+
+static void out_3digits(ansi_conv_t *conv, WORD val)
+{
+    out_byte(conv, (BYTE)('0' + (val / 100)));
+    out_byte(conv, (BYTE)('0' + ((val / 10) % 10)));
+    out_byte(conv, (BYTE)('0' + (val % 10)));
+}
+
+static void out_4digits(ansi_conv_t *conv, WORD val)
+{
+    out_byte(conv, (BYTE)('0' + (val / 1000)));
+    out_byte(conv, (BYTE)('0' + ((val / 100) % 10)));
+    out_byte(conv, (BYTE)('0' + ((val / 10) % 10)));
+    out_byte(conv, (BYTE)('0' + (val % 10)));
+}
+
+/* Emit [YYYY-MM-DDThh:mm:ss.mmmZ] */
+static void emit_timestamp(ansi_conv_t *conv)
+{
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    out_byte(conv, '[');
+    out_4digits(conv, st.wYear);
+    out_byte(conv, '-');
+    out_2digits(conv, st.wMonth);
+    out_byte(conv, '-');
+    out_2digits(conv, st.wDay);
+    out_byte(conv, 'T');
+    out_2digits(conv, st.wHour);
+    out_byte(conv, ':');
+    out_2digits(conv, st.wMinute);
+    out_byte(conv, ':');
+    out_2digits(conv, st.wSecond);
+    out_byte(conv, '.');
+    out_3digits(conv, st.wMilliseconds);
+    out_byte(conv, 'Z');
+    out_byte(conv, ']');
+    out_byte(conv, ' ');
+}
+
+static void emit_line_prefix(ansi_conv_t *conv)
+{
+    conv->at_line_start = FALSE;
+    conv->line_count++;
+    if (conv->timestamp)
+        emit_timestamp(conv);
+    if (conv->linenumber)
+    {
+        out_u64(conv, conv->line_count);
+        out_byte(conv, ':');
+        out_byte(conv, ' ');
+    }
+}
+
+/* ========================================================================== */
 /* SGR (Select Graphic Rendition) parser                                      */
 /* ========================================================================== */
 
@@ -458,6 +543,26 @@ static void process_sgr(ansi_conv_t *conv)
 
 static void process_byte(ansi_conv_t *conv, BYTE b)
 {
+    const BOOL has_prefix = conv->timestamp || conv->linenumber;
+
+    /* Fast path: FMT_RAW with line decorations (no ANSI parsing) */
+    if (conv->format == FMT_RAW)
+    {
+        if (b == '\n')
+        {
+            out_byte(conv, b);
+            if (has_prefix)
+                conv->at_line_start = TRUE;
+        }
+        else
+        {
+            if (conv->at_line_start && b != '\r')
+                emit_line_prefix(conv);
+            out_byte(conv, b);
+        }
+        return;
+    }
+
     switch (conv->state)
     {
     case STATE_NORMAL:
@@ -473,7 +578,19 @@ static void process_byte(ansi_conv_t *conv, BYTE b)
             conv->param_len = 0;
             return;
         }
-        /* Regular character */
+        /* Regular character: handle line prefix before output */
+        if (b == '\n')
+        {
+            if (conv->format == FMT_HTML)
+                html_output_char(conv, b);
+            else
+                out_byte(conv, b);
+            if (has_prefix)
+                conv->at_line_start = TRUE;
+            return;
+        }
+        if (has_prefix && conv->at_line_start && b != '\r')
+            emit_line_prefix(conv);
         if (conv->format == FMT_HTML)
             html_output_char(conv, b);
         else if (conv->format == FMT_STRIP)
@@ -549,7 +666,7 @@ static void process_byte(ansi_conv_t *conv, BYTE b)
 /* Public API                                                                 */
 /* ========================================================================== */
 
-ansi_conv_t *ansi_conv_create(output_format_t format, HANDLE hFile)
+ansi_conv_t *ansi_conv_create(output_format_t format, HANDLE hFile, BOOL timestamp, BOOL linenumber)
 {
     ansi_conv_t *conv = (ansi_conv_t *)LocalAlloc(LPTR, sizeof(ansi_conv_t));
     if (conv)
@@ -560,6 +677,10 @@ ansi_conv_t *ansi_conv_create(output_format_t format, HANDLE hFile)
         conv->param_len = 0;
         conv->span_open = FALSE;
         conv->has_error = FALSE;
+        conv->timestamp = timestamp;
+        conv->linenumber = linenumber;
+        conv->at_line_start = (timestamp || linenumber) ? TRUE : FALSE;
+        conv->line_count = 0ULL;
         conv->out_pos = 0U;
         reset_style(&conv->style);
     }

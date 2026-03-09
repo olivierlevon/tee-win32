@@ -15,6 +15,10 @@
   - [ANSI Code Stripping](#ansi-code-stripping)
   - [Converter Architecture](#converter-architecture)
   - [Combining Options](#combining-options)
+- [Line Decoration: Timestamps and Line Numbers](#line-decoration-timestamps-and-line-numbers)
+  - [Timestamp Format](#timestamp-format)
+  - [Line Number Format](#line-number-format)
+  - [Combining with ANSI Options](#combining-with-ansi-options)
 - [Multi-Threaded Architecture](#multi-threaded-architecture)
 - [Buffering and Write Combining](#buffering-and-write-combining)
 - [Signal Handling (CTRL+C)](#signal-handling-ctrlc)
@@ -122,7 +126,9 @@ Options can be specified as short flags (`-a`), long flags (`--append`), or comb
 | `-h` | `--help` | **Help.** Displays the full help screen with version info and usage instructions, then exits. |
 | | `--html` | **HTML conversion.** Converts ANSI escape codes in output files to HTML with inline CSS styling. The output is a self-contained HTML document with a dark terminal-style background, monospace font, and `<span>` tags for colors and text attributes. Stdout is not affected (raw passthrough). Mutually exclusive with `--strip`. See [ANSI-to-HTML Conversion](#ansi-to-html-conversion). |
 | `-i` | `--ignore` | **Ignore interrupt.** Ignores CTRL+C / CTRL+Break / Console Close signals. The program continues reading and writing even when the user presses CTRL+C. Without this flag, CTRL+C causes a graceful shutdown. |
+| `-n` | `--linenumber` | **Line numbers.** Prepends a line number to each line in the output files. Uses a 64-bit counter, supporting logs with up to 18 quintillion lines. Stdout is not affected (raw passthrough). See [Line Decoration](#line-decoration-timestamps-and-line-numbers). |
 | `-s` | `--strip` | **Strip ANSI codes.** Removes all ANSI escape sequences from the output files, producing clean plain text. Stdout is not affected (raw passthrough). Mutually exclusive with `--html`. See [ANSI Code Stripping](#ansi-code-stripping). |
+| `-t` | `--timestamp` | **Timestamps.** Prepends an ISO 8601 UTC timestamp to each line in the output files. Format: `[YYYY-MM-DDThh:mm:ss.mmmZ]`. Stdout is not affected (raw passthrough). See [Line Decoration](#line-decoration-timestamps-and-line-numbers). |
 | `-v` | `--version` | **Version.** Displays the version string only, then exits. |
 
 ### Option Parsing Rules
@@ -160,6 +166,8 @@ By default, output files contain the exact byte stream received from stdin. No h
 When `--html` is specified, output files are self-contained HTML documents with a header (DOCTYPE, `<html>`, `<head>`, CSS stylesheet, `<body>`, `<pre>`) and footer (`</pre>`, `</body>`, `</html>`). ANSI escape codes are converted to inline CSS `<span>` tags.
 
 When `-s` / `--strip` is specified, output files contain only the text content with all ANSI escape sequences removed. The result is clean plain text without any color codes or cursor control sequences.
+
+When `-t` / `--timestamp` and/or `-n` / `--linenumber` is specified, each line in the output files is prefixed with a timestamp and/or line number. These decorations can be combined with any format mode (`--html`, `--strip`, or raw).
 
 ## ANSI Escape Code Support
 
@@ -299,11 +307,12 @@ colored-tool.exe | tee.exe -s log1.txt log2.txt
 
 The ANSI converter (`ansiconv.c`) is implemented as a self-contained, streaming, stateful parser with zero CRT dependency:
 
-- **Per-file state**: Each output file gets its own converter instance with independent parser state. This means escape sequences split across buffer boundaries are handled correctly.
+- **Per-file state**: Each output file gets its own converter instance with independent parser state. This means escape sequences split across buffer boundaries are handled correctly. Line counters and line-start flags are also per-file.
 - **32 KB output buffer**: Converted output is buffered internally and flushed to the file handle via `WriteFile` when the buffer fills or after each input chunk is processed.
 - **Memory**: Each converter instance is allocated via `LocalAlloc` (~32 KB). No dynamic resizing or CRT heap usage.
 - **Thread safety**: Each writer thread owns its converter exclusively; no shared mutable state between converters.
-- **Stdout passthrough**: Stdout is never converted. The converter only applies to file output threads, ensuring the console always receives raw data (which is then rendered by the terminal if `-e` is used).
+- **Line prefix injection**: When timestamps or line numbers are enabled, the converter detects `\n` boundaries in the byte stream and injects prefixes at the start of each new line. The first line of output always receives a prefix. The converter is created even for `FMT_RAW` mode when line decorations are requested.
+- **Stdout passthrough**: Stdout is never converted or decorated. The converter only applies to file output threads, ensuring the console always receives raw data (which is then rendered by the terminal if `-e` is used).
 
 ### Combining Options
 
@@ -317,6 +326,94 @@ The `-e`, `--html`, and `-s` options serve complementary purposes and can be com
 | `--html` | Raw bytes | HTML with CSS colors |
 | `-e -s` | ANSI rendered by terminal | Plain text (escape codes stripped) |
 | `-e --html` | ANSI rendered by terminal | HTML with CSS colors |
+
+## Line Decoration: Timestamps and Line Numbers
+
+The `-t` / `--timestamp` and `-n` / `--linenumber` options add a prefix at the beginning of each line in the output files. These options only affect **file output** -- stdout always receives the raw, undecorated data.
+
+Both options can be used independently, together, and in combination with any of the ANSI processing modes (`--html`, `--strip`, or raw passthrough).
+
+### Timestamp Format
+
+The `-t` / `--timestamp` option prepends an ISO 8601 UTC timestamp in millisecond resolution to each line:
+
+```
+[2026-03-09T14:32:15.123Z] Starting application...
+[2026-03-09T14:32:15.456Z] Loading configuration...
+[2026-03-09T14:32:16.789Z] Ready.
+```
+
+Format breakdown:
+- Brackets `[...]` for visual separation
+- `YYYY-MM-DDThh:mm:ss.mmmZ` -- ISO 8601 with milliseconds
+- `Z` suffix indicates UTC (Coordinated Universal Time)
+- Total prefix width: 28 characters (including trailing space)
+
+The timestamp reflects the moment the line is written by the writer thread, not when it was produced by the upstream program. For most use cases the difference is negligible, but under extreme load or with `-b` (buffered mode), there may be a small delay.
+
+Uses `GetSystemTime()` (Win32 API) internally -- no CRT dependency.
+
+### Line Number Format
+
+The `-n` / `--linenumber` option prepends a line number followed by a colon and space:
+
+```
+1: Starting application...
+2: Loading configuration...
+3: Ready.
+```
+
+The line counter is a **64-bit unsigned integer** (`ULONGLONG`), supporting up to **18,446,744,073,709,551,615 lines** (over 18 quintillion). This makes it suitable for extremely large log files that run for months or years.
+
+Line numbers use **variable width** -- no leading zeros or padding. This keeps the output compact for small files while still supporting arbitrarily large line counts.
+
+Each output file maintains its own independent line counter. If you write to multiple files, each file will have its own line numbering starting from 1.
+
+### Combining Timestamp and Line Number
+
+When both `-t` and `-n` are specified, the timestamp appears first, followed by the line number:
+
+```
+[2026-03-09T14:32:15.123Z] 1: Starting application...
+[2026-03-09T14:32:15.456Z] 2: Loading configuration...
+[2026-03-09T14:32:16.789Z] 3: Ready.
+```
+
+### Combining with ANSI Options
+
+Line decorations are fully compatible with all ANSI processing modes:
+
+| Options | Output Files |
+|---|---|
+| `-t` | Raw bytes + timestamps |
+| `-n` | Raw bytes + line numbers |
+| `-tn` | Raw bytes + timestamps + line numbers |
+| `-ts` | Plain text (ANSI stripped) + timestamps |
+| `-ns` | Plain text (ANSI stripped) + line numbers |
+| `-t --html` | HTML with timestamps (prefixes appear inside `<pre>`) |
+| `-n --html` | HTML with line numbers (prefixes appear inside `<pre>`) |
+| `-tns` | Plain text + timestamps + line numbers |
+| `-tn --html` | HTML + timestamps + line numbers |
+
+#### Example: Timestamped stripped log
+
+```cmd
+colored-app.exe | tee.exe -ets app.log
+```
+
+Console shows colors (via `-e`), file gets clean text with timestamps:
+```
+[2026-03-09T14:32:15.123Z] INFO: Application started
+[2026-03-09T14:32:15.456Z] WARN: Config file not found, using defaults
+```
+
+#### Example: Numbered HTML report
+
+```cmd
+build-tool.exe 2>&1 | tee.exe -en --html build.html
+```
+
+Console shows colors, HTML file has colored output with line numbers.
 
 ## Multi-Threaded Architecture
 
@@ -471,7 +568,7 @@ The project includes a GitHub Actions workflow (`.github/workflows/build.yml`) t
 1. **Windows only**: There is no support for Linux, macOS, or any other operating system. The program is built entirely on Win32 APIs.
 2. **No stdin from console**: The program is designed for pipe usage. It reads from stdin, which must be redirected from another program or a file. It does not provide an interactive mode where you type input directly.
 3. **No output to stdout suppression**: Unlike some `tee` implementations, there is no option to write only to files and suppress stdout output. Data always goes to stdout.
-4. **No timestamps or line numbers**: The program does not add timestamps or line numbers to the output. However, ANSI-to-HTML conversion and ANSI stripping are available via `--html` and `-s`/`--strip`.
+4. **No custom timestamp format**: Timestamps use a fixed ISO 8601 UTC format (`[YYYY-MM-DDThh:mm:ss.mmmZ]`). Local time or custom formats are not supported.
 5. **Maximum 63 output files**: Limited by `MAXIMUM_WAIT_OBJECTS` (64) minus 1 for the stdout writer thread.
 6. **No stderr capture**: Only stdout from the upstream program is captured. To include stderr, use shell redirection (`2>&1`) before the pipe.
 7. **No regex filtering or line selection**: Unlike `grep` or `sed`, `tee` passes all data through unmodified. Filtering must be done by other tools in the pipeline.
@@ -549,6 +646,34 @@ ci-build.exe 2>&1 | tee.exe -e --html build_report.html build_report_backup.html
 ```
 
 Both output files receive the HTML-formatted version. The console shows live colored output.
+
+### Add timestamps to log files
+
+```cmd
+server.exe | tee.exe -t server.log
+```
+
+Each line in `server.log` is prefixed with `[2026-03-09T14:32:15.123Z] `. Console output is unchanged.
+
+### Add line numbers and timestamps
+
+```cmd
+long-running-process.exe | tee.exe -tn process.log
+```
+
+Each line gets both a timestamp and a line number:
+```
+[2026-03-09T14:32:15.123Z] 1: Starting...
+[2026-03-09T14:32:15.456Z] 2: Processing item 1...
+```
+
+### Numbered, stripped, colored log
+
+```cmd
+colored-ci.exe 2>&1 | tee.exe -ens build.log
+```
+
+Console shows live colors (`-e`), file gets stripped plain text with line numbers (`-ns`).
 
 ### Speed up slow terminal output
 
