@@ -21,16 +21,8 @@ jobs:
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v2
-
-    - name: Install ARM64 build tools
-      if: matrix.platform == 'a64'
-      run: |
-        & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe" `
-          modify --installPath "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise" `
-          --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 `
-          --quiet --norestart --wait
-      shell: pwsh
-      continue-on-error: true
+      with:
+        vs-version: '[17.0,)'
 
     - name: Build
       run: msbuild tee.sln /p:Platform=${{ matrix.platform }} /p:Configuration=${{ matrix.configuration }} /m
