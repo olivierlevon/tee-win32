@@ -1,6 +1,6 @@
 /*
  * tee for Windows - ANSI escape code converter
- * Copyright (c) 2024 "dEajL3kA" <Cumpoing79@web.de>
+ * Copyright (c) 2026 Olivier Levon
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
  * associated documentation files (the "Software"), to deal in the Software without restriction,
