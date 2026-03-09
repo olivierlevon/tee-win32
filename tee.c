@@ -22,6 +22,7 @@
 #include <stdarg.h>
 #include "include/cpu.h"
 #include "include/version.h"
+#include "include/ansiconv.h"
 
 #pragma intrinsic(_InterlockedIncrement, _InterlockedDecrement, _InterlockedExchange, _InterlockedCompareExchange)
 
@@ -290,6 +291,7 @@ typedef struct _thread
 {
     HANDLE hOutput, hError;
     BOOL flush;
+    ansi_conv_t *conv;
 }
 thread_t;
 
@@ -306,6 +308,12 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
     BOOL myFlag = TRUE, writeErrors = FALSE;
     PSRWLOCK rwLock = NULL;
     const thread_t *const param = (const thread_t*)lpThreadParameter;
+
+    /* Write format header (e.g., HTML preamble) if converter is active */
+    if (param->conv)
+    {
+        ansi_conv_write_header(param->conv);
+    }
 
     for (;;)
     {
@@ -325,6 +333,11 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
         if (bytesTotal > BUFFER_SIZE)
         {
             ReleaseSRWLockShared(rwLock);
+            /* Write format footer (e.g., HTML closing tags) before exiting */
+            if (param->conv)
+            {
+                ansi_conv_write_footer(param->conv);
+            }
             if (writeErrors)
             {
                 write_text(param->hError, L"[tee] I/O error: Not all data could be written!\n");
@@ -332,13 +345,23 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
             return 0U;
         }
 
-        for (DWORD offset = 0U; offset < bytesTotal; offset += bytesWritten)
+        if (param->conv)
         {
-            const BOOL result = WriteFile(param->hOutput, g_buffer[myIndex] + offset, bytesTotal - offset, &bytesWritten, NULL);
-            if ((!result) || (!bytesWritten))
+            if (!ansi_conv_write(param->conv, g_buffer[myIndex], bytesTotal))
             {
                 writeErrors = TRUE;
-                break;
+            }
+        }
+        else
+        {
+            for (DWORD offset = 0U; offset < bytesTotal; offset += bytesWritten)
+            {
+                const BOOL result = WriteFile(param->hOutput, g_buffer[myIndex] + offset, bytesTotal - offset, &bytesWritten, NULL);
+                if ((!result) || (!bytesWritten))
+                {
+                    writeErrors = TRUE;
+                    break;
+                }
             }
         }
 
@@ -368,7 +391,7 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
 
 typedef struct
 {
-    BOOL append, buffer, delay, escape, flush, help, ignore, version;
+    BOOL append, buffer, delay, escape, flush, help, html, ignore, strip, version;
 }
 options_t;
 
@@ -392,7 +415,9 @@ static BOOL parse_option(options_t *const options, const wchar_t c, const wchar_
     PARSE_OPTION('e', escape);
     PARSE_OPTION('f', flush);
     PARSE_OPTION('h', help);
+    PARSE_OPTION('\0', html);
     PARSE_OPTION('i', ignore);
+    PARSE_OPTION('s', strip);
     PARSE_OPTION('v', version);
 
     return FALSE;
@@ -442,6 +467,8 @@ static void print_helpscreen(const HANDLE hStdErr, const BOOL full)
             L"  -e --escape  Enable standard output ANSI escape code processing\n"
             L"  -f --flush   Flush output file after each write operation\n"
             L"  -i --ignore  Ignore the interrupt signal (SIGINT), e.g. CTRL+C\n"
+            L"  -s --strip   Strip ANSI escape codes from output file(s)\n"
+            L"     --html    Convert ANSI escape codes to HTML in output file(s)\n"
             L"  -d --delay   Add a small delay after each read operation\n\n");
     }
     if (versionString)
@@ -517,6 +544,16 @@ int wmain(const int argc, const wchar_t *const argv[])
         return 0;
     }
 
+    /* Validate mutually exclusive options */
+    if (options.html && options.strip)
+    {
+        write_text(hStdErr, L"[tee] Error: Options --html and --strip are mutually exclusive!\n");
+        return 1;
+    }
+
+    /* Determine output format for files */
+    const output_format_t outputFormat = options.html ? FMT_HTML : (options.strip ? FMT_STRIP : FMT_RAW);
+
     /* Check output file name */
     if (argOff >= argc)
     {
@@ -584,6 +621,17 @@ int wmain(const int argc, const wchar_t *const argv[])
         threadData[threadId].hOutput = (threadId > 0U) ? hMyFiles[threadId - 1U] : hStdOut;
         threadData[threadId].hError = hStdErr;
         threadData[threadId].flush = options.flush && (!is_terminal(threadData[threadId].hOutput));
+        threadData[threadId].conv = NULL;
+        /* Create ANSI converter for file outputs (not stdout) */
+        if ((threadId > 0U) && (outputFormat != FMT_RAW))
+        {
+            threadData[threadId].conv = ansi_conv_create(outputFormat, threadData[threadId].hOutput);
+            if (!threadData[threadId].conv)
+            {
+                write_text(hStdErr, L"[tee] Error: Failed to create ANSI converter!\n");
+                goto cleanUp;
+            }
+        }
         if (!(hThreads[threadCount++] = CreateThread(NULL, 0U, writer_thread_start_routine, (LPVOID)&threadData[threadId], 0U, NULL)))
         {
             write_text(hStdErr, L"[tee] Operating system error: CreateThread() has failed!\n");
@@ -720,10 +768,15 @@ cleanUp:
         }
     }
 
-    /* Close worker threads */
+    /* Close worker threads and destroy converters */
     for (DWORD threadId = 0U; threadId < ARRAYSIZE(hThreads); ++threadId)
     {
         CLOSE_HANDLE(hThreads[threadId]);
+        if (threadData[threadId].conv)
+        {
+            ansi_conv_destroy(threadData[threadId].conv);
+            threadData[threadId].conv = NULL;
+        }
     }
 
     /* Close the output file(s) */

@@ -282,6 +282,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="tee.c" />
+    <ClCompile Include="ansiconv.c" />
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="etc\resources\compatibility.manifest" />
@@ -303,6 +304,7 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\ansiconv.h" />
     <ClInclude Include="include\cpu.h" />
     <ClInclude Include="include\version.h" />
   </ItemGroup>
