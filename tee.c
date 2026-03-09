@@ -132,12 +132,19 @@ static wchar_t *concat_va(const wchar_t *const first, ...)
     wchar_t *const buffer = (wchar_t*)LocalAlloc(LPTR, sizeof(wchar_t) * (len + 1U));
     if (buffer)
     {
+        wchar_t *dest = buffer;
         va_start(ap, first);
         for (ptr = first; ptr != NULL; ptr = va_arg(ap, const wchar_t*))
         {
-            lstrcatW(buffer, ptr);
+            const int ptrLen = lstrlenW(ptr);
+            if (ptrLen > 0)
+            {
+                CopyMemory(dest, ptr, sizeof(wchar_t) * ptrLen);
+                dest += ptrLen;
+            }
         }
         va_end(ap);
+        *dest = L'\0';
     }
 
     return buffer;
