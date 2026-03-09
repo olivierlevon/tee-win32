@@ -16,12 +16,19 @@ Usage:
   gizmo.exe [...] | tee.exe [options] <file_1> ... <file_n>
 
 Options:
-  -a --append  Append to the existing file, instead of truncating
-  -b --buffer  Enable write combining, i.e. buffer small chunks
-  -e --escape  Enable standard output ANSI escape code processing
-  -f --flush   Flush output file after each write operation
-  -i --ignore  Ignore the interrupt signal (SIGINT), e.g. CTRL+C
-  -d --delay   Add a small delay after each read operation
+  -a --append      Append to the existing file, instead of truncating
+  -b --buffer      Enable write combining, i.e. buffer small chunks
+  -e --escape      Enable standard output ANSI escape code processing
+  -f --flush       Flush output file after each write operation
+  -i --ignore      Ignore the interrupt signal (SIGINT), e.g. CTRL+C
+  -n --linenumber  Add line numbers to output file(s)
+  -s --strip       Strip ANSI escape codes from output file(s)
+  -t --timestamp   Add ISO 8601 UTC timestamps to output file(s)
+     --html        Convert ANSI escape codes to HTML in output file(s)
+  -d --delay       Add a small delay after each read operation
+     --grep <pat>  Only write lines matching regex <pat> to output file(s)
+     --rotate <sz> Rotate output file(s) when they reach <sz> (e.g., 50M)
+     --keep <n>    Keep <n> rotated files (default: 5)
 ```
 
 ### Terminal output
