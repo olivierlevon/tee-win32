@@ -549,7 +549,7 @@ int wmain(const int argc, const wchar_t *const argv[])
         const wchar_t* const fileName = argv[argOff++];
         if (!is_null_device(fileName))
         {
-            const HANDLE hFile = CreateFileW(fileName, GENERIC_WRITE, FILE_SHARE_READ, NULL, options.append ? OPEN_ALWAYS : CREATE_ALWAYS, 0U, NULL);
+            const HANDLE hFile = CreateFileW(fileName, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, options.append ? OPEN_ALWAYS : CREATE_ALWAYS, 0U, NULL);
             if ((hMyFiles[fileCount++] = hFile) == INVALID_HANDLE_VALUE)
             {
                 WRITE_TEXT(L"[tee] Error: Failed to open the output file \"", fileName, L"\" for writing!\n");
