@@ -294,13 +294,14 @@ typedef struct _thread
     BOOL flush;
     ansi_conv_t *conv;
     /* Grep filtering */
-    char *grep_utf8;            /* UTF-8 pattern, NULL = disabled */
-    int grep_utf8_len;
-    BYTE *grep_line_buf;        /* line accumulation buffer */
+    const BYTE *grep_pattern;       /* pattern bytes (points to grep_pattern_buf) */
+    DWORD grep_pattern_len;
+    DWORD grep_skip[256];           /* BMH bad-character skip table (case-folded) */
+    BYTE *grep_line_buf;            /* line accumulation buffer */
     DWORD grep_line_len;
     /* Log rotation */
-    wchar_t *fileName;          /* output file path (for rotate) */
-    ULONGLONG rotate_size;      /* 0 = disabled */
+    wchar_t *fileName;              /* output file path (for rotate) */
+    ULONGLONG rotate_size;          /* 0 = disabled */
     DWORD keep_count;
 }
 thread_t;
@@ -344,9 +345,9 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
         if (bytesTotal > BUFFER_SIZE)
         {
             /* Flush remaining grep line buffer before exit */
-            if (param->grep_utf8 && param->grep_line_len > 0U)
+            if (param->grep_pattern && param->grep_line_len > 0U)
             {
-                if (line_matches(param->grep_line_buf, param->grep_line_len, param->grep_utf8, param->grep_utf8_len))
+                if (line_matches_bmh(param->grep_line_buf, param->grep_line_len, param))
                 {
                     if (param->conv)
                         ansi_conv_write(param->conv, param->grep_line_buf, param->grep_line_len);
@@ -373,7 +374,7 @@ static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
         const BYTE *writeData = g_buffer[myIndex];
         DWORD writeLen = bytesTotal;
 
-        if (param->grep_utf8)
+        if (param->grep_pattern)
         {
             writeLen = grep_filter_buffer(param, g_buffer[myIndex], bytesTotal, filteredBuf, BUFFER_SIZE);
             writeData = filteredBuf;
@@ -480,54 +481,170 @@ static DWORD parse_uint(const wchar_t *str)
 }
 
 // --------------------------------------------------------------------------
-// Grep helpers
+// Grep helpers (Boyer-Moore-Horspool, case-insensitive)
 // --------------------------------------------------------------------------
 
-static BOOL line_matches(const BYTE *line, DWORD line_len, const char *pattern, int pattern_len)
+static __forceinline BYTE to_lower_byte(BYTE b)
+{
+    return (b >= 'A' && b <= 'Z') ? (b + 32) : b;
+}
+
+/*
+ * Convert wide-char grep pattern directly to a lowercase byte array.
+ * For pure ASCII patterns (all chars <= 0x7F), each wchar_t maps to one byte.
+ * For non-ASCII, falls back to WideCharToMultiByte (UTF-8).
+ * Returns allocated buffer (LocalAlloc) and sets *out_len. NULL on failure.
+ */
+static BYTE *grep_pattern_to_bytes(const wchar_t *pattern, DWORD *out_len)
+{
+    const int wlen = lstrlenW(pattern);
+    BOOL is_ascii = TRUE;
+    int i;
+
+    for (i = 0; i < wlen; i++)
+    {
+        if (pattern[i] > 0x7F)
+        {
+            is_ascii = FALSE;
+            break;
+        }
+    }
+
+    if (is_ascii)
+    {
+        /* Fast path: direct extraction, no WideCharToMultiByte needed */
+        BYTE *buf = (BYTE*)LocalAlloc(LPTR, (SIZE_T)wlen + 1U);
+        if (!buf)
+            return NULL;
+        for (i = 0; i < wlen; i++)
+            buf[i] = to_lower_byte((BYTE)pattern[i]);
+        buf[wlen] = 0;
+        *out_len = (DWORD)wlen;
+        return buf;
+    }
+    else
+    {
+        /* Fallback: UTF-8 conversion for non-ASCII patterns */
+        const int utf8_size = WideCharToMultiByte(CP_UTF8, 0, pattern, -1, NULL, 0, NULL, NULL);
+        if (utf8_size <= 0)
+            return NULL;
+        BYTE *buf = (BYTE*)LocalAlloc(LPTR, (SIZE_T)utf8_size);
+        if (!buf)
+            return NULL;
+        WideCharToMultiByte(CP_UTF8, 0, pattern, -1, (char*)buf, utf8_size, NULL, NULL);
+        *out_len = (DWORD)(utf8_size - 1); /* exclude NUL */
+        /* Lowercase the pattern bytes (ASCII range only) */
+        for (i = 0; i < (int)*out_len; i++)
+            buf[i] = to_lower_byte(buf[i]);
+        return buf;
+    }
+}
+
+/*
+ * Build the Boyer-Moore-Horspool bad-character skip table.
+ * Pattern bytes must already be lowercased.
+ */
+static void grep_build_skip_table(DWORD skip[256], const BYTE *pattern, DWORD pattern_len)
 {
     DWORD i;
-    int j;
 
-    if (pattern_len <= 0 || (DWORD)pattern_len > line_len)
+    for (i = 0U; i < 256U; i++)
+        skip[i] = pattern_len;
+
+    /* Last char is excluded from skip table (standard BMH) */
+    for (i = 0U; i < pattern_len - 1U; i++)
+        skip[pattern[i]] = pattern_len - 1U - i;
+
+    /* Case-insensitive: also set skip for the opposite case */
+    for (i = 0U; i < pattern_len - 1U; i++)
+    {
+        const BYTE c = pattern[i];
+        if (c >= 'a' && c <= 'z')
+            skip[c - 32] = pattern_len - 1U - i; /* uppercase variant */
+    }
+}
+
+/*
+ * Boyer-Moore-Horspool case-insensitive substring search.
+ * Returns TRUE if pattern is found anywhere in line.
+ */
+static BOOL line_matches_bmh(const BYTE *line, DWORD line_len, const thread_t *param)
+{
+    const DWORD pat_len = param->grep_pattern_len;
+    const BYTE *pat = param->grep_pattern;
+    const DWORD *skip = param->grep_skip;
+    DWORD pos, j;
+
+    if (pat_len == 0U || pat_len > line_len)
         return FALSE;
 
-    for (i = 0U; i <= line_len - (DWORD)pattern_len; i++)
+    pos = pat_len - 1U;
+    while (pos < line_len)
     {
-        BOOL match = TRUE;
-        for (j = 0; j < pattern_len; j++)
+        j = pat_len - 1U;
+        while (to_lower_byte(line[pos - (pat_len - 1U - j)]) == pat[j])
         {
-            BYTE a = line[i + (DWORD)j], b = (BYTE)pattern[j];
-            if (a >= 'A' && a <= 'Z') a += 32;
-            if (b >= 'A' && b <= 'Z') b += 32;
-            if (a != b) { match = FALSE; break; }
+            if (j == 0U)
+                return TRUE;
+            j--;
         }
-        if (match)
-            return TRUE;
+        pos += skip[line[pos]];
     }
     return FALSE;
 }
 
+/*
+ * Filter a data buffer through grep, extracting only matching lines.
+ * Uses memchr-style block scanning to find newlines instead of byte-by-byte.
+ * Returns the number of bytes written to out_buf.
+ */
 static DWORD grep_filter_buffer(thread_t *param, const BYTE *data, DWORD size, BYTE *out_buf, DWORD out_cap)
 {
-    DWORD out_len = 0U, i;
+    DWORD out_len = 0U, pos = 0U;
 
-    for (i = 0U; i < size; i++)
+    while (pos < size)
     {
-        if (param->grep_line_len < GREP_LINE_BUF_SIZE)
-            param->grep_line_buf[param->grep_line_len++] = data[i];
-
-        if (data[i] == '\n')
+        /* Scan for next newline in the remaining data */
+        const BYTE *nl = NULL;
+        DWORD scan;
+        for (scan = pos; scan < size; scan++)
         {
-            if (line_matches(param->grep_line_buf, param->grep_line_len, param->grep_utf8, param->grep_utf8_len))
+            if (data[scan] == '\n')
             {
-                const DWORD copy_len = (param->grep_line_len <= out_cap - out_len) ? param->grep_line_len : 0U;
-                if (copy_len > 0U)
+                nl = &data[scan];
+                break;
+            }
+        }
+
+        if (nl)
+        {
+            /* Complete line found: accumulate and test */
+            const DWORD chunk = (DWORD)(nl - &data[pos]) + 1U;
+            const DWORD avail = GREP_LINE_BUF_SIZE - param->grep_line_len;
+            const DWORD copy = (chunk < avail) ? chunk : avail;
+            CopyMemory(param->grep_line_buf + param->grep_line_len, &data[pos], copy);
+            param->grep_line_len += copy;
+
+            if (line_matches_bmh(param->grep_line_buf, param->grep_line_len, param))
+            {
+                if (param->grep_line_len <= out_cap - out_len)
                 {
-                    CopyMemory(out_buf + out_len, param->grep_line_buf, copy_len);
-                    out_len += copy_len;
+                    CopyMemory(out_buf + out_len, param->grep_line_buf, param->grep_line_len);
+                    out_len += param->grep_line_len;
                 }
             }
             param->grep_line_len = 0U;
+            pos += chunk;
+        }
+        else
+        {
+            /* No newline: partial line, accumulate remainder */
+            const DWORD remainder = size - pos;
+            const DWORD avail = GREP_LINE_BUF_SIZE - param->grep_line_len;
+            const DWORD copy = (remainder < avail) ? remainder : avail;
+            CopyMemory(param->grep_line_buf + param->grep_line_len, &data[pos], copy);
+            param->grep_line_len += copy;
+            break;
         }
     }
     return out_len;
@@ -708,8 +825,9 @@ int wmain(const int argc, const wchar_t *const argv[])
     PSRWLOCK rwLock = NULL;
     options_t options;
     static thread_t threadData[MAX_THREADS];
-    char *grep_utf8 = NULL;
-    int grep_utf8_len = 0;
+    BYTE *grep_pattern_buf = NULL;
+    DWORD grep_pattern_len = 0U;
+    DWORD grep_skip[256];
     const wchar_t *fileNames[MAX_THREADS - 1U];
 
     /* Initialize local variables */
@@ -849,16 +967,17 @@ int wmain(const int argc, const wchar_t *const argv[])
         }
     }
 
-    /* Convert grep pattern to UTF-8 */
+    /* Convert grep pattern to byte array and build BMH skip table */
     if (options.grep_pattern)
     {
-        grep_utf8 = utf16_to_utf8(options.grep_pattern);
-        if (!grep_utf8)
+        grep_pattern_buf = grep_pattern_to_bytes(options.grep_pattern, &grep_pattern_len);
+        if (!grep_pattern_buf || grep_pattern_len == 0U)
         {
-            write_text(hStdErr, L"[tee] Error: Failed to convert grep pattern to UTF-8!\n");
+            write_text(hStdErr, L"[tee] Error: Invalid or empty grep pattern!\n");
+            if (grep_pattern_buf) { LocalFree(grep_pattern_buf); grep_pattern_buf = NULL; }
             return 1;
         }
-        grep_utf8_len = lstrlenA(grep_utf8);
+        grep_build_skip_table(grep_skip, grep_pattern_buf, grep_pattern_len);
     }
 
     /* Open output file(s) */
@@ -903,10 +1022,11 @@ int wmain(const int argc, const wchar_t *const argv[])
         threadData[threadId].flush = options.flush && (!is_terminal(threadData[threadId].hOutput));
         threadData[threadId].conv = NULL;
         /* Set up grep filtering for file outputs only (not stdout) */
-        if ((threadId > 0U) && grep_utf8)
+        if ((threadId > 0U) && grep_pattern_buf)
         {
-            threadData[threadId].grep_utf8 = grep_utf8;
-            threadData[threadId].grep_utf8_len = grep_utf8_len;
+            threadData[threadId].grep_pattern = grep_pattern_buf;
+            threadData[threadId].grep_pattern_len = grep_pattern_len;
+            CopyMemory(threadData[threadId].grep_skip, grep_skip, sizeof(grep_skip));
             threadData[threadId].grep_line_buf = (BYTE*)LocalAlloc(LPTR, GREP_LINE_BUF_SIZE);
             threadData[threadId].grep_line_len = 0U;
             if (!threadData[threadId].grep_line_buf)
@@ -1098,11 +1218,11 @@ cleanUp:
         CLOSE_HANDLE(hMyFiles[fileIndex]);
     }
 
-    /* Free grep UTF-8 pattern */
-    if (grep_utf8)
+    /* Free grep pattern buffer */
+    if (grep_pattern_buf)
     {
-        LocalFree(grep_utf8);
-        grep_utf8 = NULL;
+        LocalFree(grep_pattern_buf);
+        grep_pattern_buf = NULL;
     }
 
     /* Exit */
