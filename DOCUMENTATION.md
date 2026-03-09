@@ -29,6 +29,15 @@
 - [Build System and CI/CD](#build-system-and-cicd)
 - [Exit Codes](#exit-codes)
 - [Limitations](#limitations)
+- [Line Filtering: Grep](#line-filtering-grep)
+  - [Pattern Matching](#pattern-matching)
+  - [Grep with Other Options](#grep-with-other-options)
+- [Log Rotation](#log-rotation)
+  - [Rotation Mechanism](#rotation-mechanism)
+  - [Size Suffixes](#size-suffixes)
+  - [Keep Count](#keep-count)
+  - [Rotation with Converters](#rotation-with-converters)
+  - [Rotation with Other Options](#rotation-with-other-options)
 - [Examples](#examples)
 - [License](#license)
 
@@ -38,7 +47,7 @@
 
 **tee for Windows** is a native Win32 implementation of the classic Unix `tee` command. It reads data from standard input (stdin) and simultaneously writes it to standard output (stdout) **and** one or more output files. Unlike ports based on MSYS2, Cygwin, or other POSIX emulation layers, this program is built directly on top of the Win32 API for maximum performance and minimal dependencies.
 
-Current version: **1.3.4**
+Current version: **1.4.0**
 
 ## What is `tee`?
 
@@ -130,6 +139,9 @@ Options can be specified as short flags (`-a`), long flags (`--append`), or comb
 | `-s` | `--strip` | **Strip ANSI codes.** Removes all ANSI escape sequences from the output files, producing clean plain text. Stdout is not affected (raw passthrough). Mutually exclusive with `--html`. See [ANSI Code Stripping](#ansi-code-stripping). |
 | `-t` | `--timestamp` | **Timestamps.** Prepends an ISO 8601 UTC timestamp to each line in the output files. Format: `[YYYY-MM-DDThh:mm:ss.mmmZ]`. Stdout is not affected (raw passthrough). See [Line Decoration](#line-decoration-timestamps-and-line-numbers). |
 | `-v` | `--version` | **Version.** Displays the version string only, then exits. |
+| | `--grep <pat>` | **Grep filter.** Only write lines containing the substring `<pat>` (case-insensitive) to output files. Stdout always receives all data unfiltered. See [Line Filtering: Grep](#line-filtering-grep). |
+| | `--rotate <sz>` | **Log rotation.** When an output file reaches `<sz>` bytes, rotate it (rename to `.1`, shift older files, create new empty file). Supports `K`, `M`, `G` suffixes. See [Log Rotation](#log-rotation). |
+| | `--keep <n>` | **Rotation keep count.** Keep `<n>` rotated files (default: 5). Oldest files beyond `<n>` are deleted. Only meaningful with `--rotate`. |
 
 ### Option Parsing Rules
 
@@ -415,6 +427,195 @@ build-tool.exe 2>&1 | tee.exe -en --html build.html
 
 Console shows colors, HTML file has colored output with line numbers.
 
+## Line Filtering: Grep
+
+The `--grep <pattern>` option filters output so that **only lines containing the given substring** are written to the output files. This is useful for extracting specific information (errors, warnings, status messages) from a verbose output stream while still seeing everything in the console.
+
+**Key behavior:**
+- Stdout (console) always receives **all data unfiltered** -- the grep filter only applies to file outputs.
+- Matching is **case-insensitive** for ASCII characters (A-Z / a-z).
+- The match is a **substring search** -- the pattern can appear anywhere in the line.
+- Lines are delimited by `\n` (line feed). Partial lines at end-of-stream are also checked.
+- Each output file thread maintains its own line accumulation buffer (64 KB), so lines split across buffer boundaries are handled correctly.
+
+### Pattern Matching
+
+The pattern is specified as a UTF-16 command-line argument, converted internally to UTF-8 for byte-level matching against the data stream. This means patterns work correctly with ASCII and UTF-8 encoded text. The case folding is ASCII-only (A-Z ↔ a-z), which covers the vast majority of use cases (log levels, error codes, function names).
+
+Examples of pattern matching:
+
+| Pattern | Line | Match? |
+|---|---|---|
+| `error` | `[ERROR] File not found` | Yes (case-insensitive) |
+| `error` | `No errors detected` | Yes (`error` is a substring of `errors`) |
+| `WARN` | `WARNING: disk space low` | Yes |
+| `fatal` | `INFO: all good` | No |
+| `build` | `Rebuilding index...` | Yes (`build` found inside `Rebuilding`) |
+
+### Grep with Other Options
+
+The grep filter is applied **before** any converter processing (timestamps, line numbers, HTML, strip). This means:
+
+| Options | Console (stdout) | Output Files |
+|---|---|---|
+| `--grep "error"` | All data | Only lines containing "error" |
+| `--grep "error" -t` | All data | Matching lines with timestamps |
+| `--grep "error" -n` | All data | Matching lines with line numbers (numbered from 1, counting only matching lines) |
+| `--grep "error" -s` | All data | Matching lines with ANSI codes stripped |
+| `--grep "error" --html` | All data | Matching lines converted to HTML |
+| `--grep "error" -ets` | ANSI rendered | Matching lines, stripped, with timestamps |
+
+#### Example: Extract errors from a build
+
+```cmd
+msbuild project.sln 2>&1 | tee.exe --grep "error" -t errors.log
+```
+
+Console shows the full build output. `errors.log` contains only lines with "error" (case-insensitive), each prefixed with a UTC timestamp:
+```
+[2026-03-09T14:32:15.123Z] src\main.c(42): error C2065: 'foo': undeclared identifier
+[2026-03-09T14:32:15.456Z] src\util.c(17): error C2143: syntax error: missing ';'
+```
+
+#### Example: Monitor warnings in real time
+
+```cmd
+server.exe 2>&1 | tee.exe --grep "warn" -f warnings.log
+```
+
+Console shows all server output. `warnings.log` is written and flushed (`-f`) in real time with only warning lines, allowing another terminal to watch with `type warnings.log` or a tail utility.
+
+#### Example: Multiple severity filters
+
+```cmd
+ci-build.exe 2>&1 | tee.exe --grep "error" errors.log
+```
+
+Note: the same grep pattern applies to all output files. To filter different patterns to different files, chain multiple `tee` instances:
+
+```cmd
+ci-build.exe 2>&1 | tee.exe --grep "error" errors.log | tee.exe --grep "warn" warnings.log > full.log
+```
+
+The first `tee` filters errors to `errors.log` and passes **all data** to stdout (grep only affects files). The second `tee` filters warnings to `warnings.log`. The final redirect captures everything to `full.log`.
+
+## Log Rotation
+
+The `--rotate <size>` option enables **automatic log rotation**: when an output file reaches the specified size, it is closed, renamed, and a new empty file is created. This prevents log files from growing indefinitely, which is essential for long-running services, CI/CD pipelines, and continuous monitoring.
+
+### Rotation Mechanism
+
+When the output file reaches the rotation threshold, the following sequence occurs:
+
+1. If a converter is active (HTML, strip, timestamps, line numbers):
+   - The converter's internal buffer is flushed
+   - The format footer is written (HTML closing tags if `--html`)
+2. The current file handle is closed
+3. Files are shifted:
+   - The oldest file (`.N` where N = keep count) is **deleted**
+   - Each remaining rotated file is renamed: `.N-1` → `.N`, `.N-2` → `.N-1`, etc.
+   - The base file is renamed to `.1`
+4. A new empty base file is created
+5. If a converter is active:
+   - The converter state is fully reset (line counter back to 1, parser state cleared)
+   - The format header is written (HTML preamble if `--html`)
+
+```
+Before rotation (keep=3):
+  build.log      (50 MB, at threshold)
+  build.log.1    (previous rotation)
+  build.log.2    (older)
+  build.log.3    (oldest, will be deleted)
+
+After rotation:
+  build.log      (0 bytes, new file)
+  build.log.1    (was build.log, 50 MB)
+  build.log.2    (was build.log.1)
+  build.log.3    (was build.log.2)
+  [build.log.3 from before was deleted]
+```
+
+### Size Suffixes
+
+The `--rotate` option accepts a numeric value with an optional suffix:
+
+| Suffix | Multiplier | Example | Actual Size |
+|---|---|---|---|
+| *(none)* | 1 (bytes) | `--rotate 1048576` | 1,048,576 bytes |
+| `K` | 1,024 (KiB) | `--rotate 512K` | 524,288 bytes |
+| `M` | 1,048,576 (MiB) | `--rotate 50M` | 52,428,800 bytes |
+| `G` | 1,073,741,824 (GiB) | `--rotate 1G` | 1,073,741,824 bytes |
+
+Suffixes are **case-insensitive** (`50m` = `50M`). The value must be greater than zero.
+
+### Keep Count
+
+The `--keep <n>` option specifies how many rotated files to retain. Default: **5**.
+
+| `--keep` | Files on disk (after many rotations) |
+|---|---|
+| `--keep 1` | `app.log`, `app.log.1` |
+| `--keep 3` | `app.log`, `app.log.1`, `app.log.2`, `app.log.3` |
+| `--keep 10` | `app.log`, `app.log.1` ... `app.log.10` |
+
+Using `--keep` without `--rotate` produces a warning and has no effect.
+
+### Rotation with Converters
+
+Log rotation is fully compatible with all converter modes:
+
+- **Raw mode** (default): Files are simply closed and reopened. No special handling.
+- **`--html` mode**: Each rotated file is a **self-contained HTML document** -- the footer (`</pre></body></html>`) is written before closing, and the header (DOCTYPE, CSS, `<pre>`) is written to the new file. This means every `.html`, `.html.1`, `.html.2`, etc. can be opened directly in a browser.
+- **`--strip` mode**: ANSI parser state is reset on rotation; the new file starts clean.
+- **Timestamps (`-t`)**: Timestamps continue reflecting real time in the new file.
+- **Line numbers (`-n`)**: The line counter **resets to 1** on each rotation, so each rotated file has its own independent line numbering.
+
+### Rotation with Other Options
+
+| Options | Behavior |
+|---|---|
+| `--rotate 50M` | Rotate at 50 MiB, keep 5 files (default) |
+| `--rotate 50M --keep 3` | Rotate at 50 MiB, keep 3 files |
+| `--rotate 100M -a` | Append mode + rotation (initial append may trigger immediate rotation if file already exceeds threshold) |
+| `--rotate 10M -f` | Rotate at 10 MiB, flush after each write |
+| `--rotate 50M --html` | Each rotated HTML file is self-contained |
+| `--rotate 50M -tn` | Each rotated file has fresh timestamps and line numbers starting from 1 |
+| `--rotate 50M --grep "error"` | Only error lines are written; rotation triggers when filtered output reaches 50 MiB |
+
+#### Example: Long-running service with rotation
+
+```cmd
+my-service.exe 2>&1 | tee.exe --rotate 100M --keep 10 -t service.log
+```
+
+- Console shows all output in real time
+- `service.log` is the current log file with timestamps
+- When it reaches 100 MiB, it rotates to `service.log.1`
+- Up to 10 rotated files are kept (total max ~1.1 GB on disk)
+- Each rotated file has its own line numbering and timestamp continuity
+
+#### Example: CI build with HTML rotation
+
+```cmd
+ci-pipeline.exe 2>&1 | tee.exe -e --rotate 20M --keep 3 --html build.html
+```
+
+- Console shows live colored output
+- `build.html` is the current HTML log (self-contained, viewable in browser)
+- Rotated files `build.html.1`, `build.html.2`, `build.html.3` are also valid HTML
+- Each file has its own DOCTYPE, CSS, and closing tags
+
+#### Example: Error-only rotated log
+
+```cmd
+noisy-app.exe 2>&1 | tee.exe --grep "error" --rotate 10M --keep 5 -f errors.log
+```
+
+- Console shows everything
+- `errors.log` only contains lines matching "error"
+- Rotated when the filtered output reaches 10 MiB
+- Flushed after each write for real-time monitoring
+
 ## Multi-Threaded Architecture
 
 ### Design
@@ -571,7 +772,7 @@ The project includes a GitHub Actions workflow (`.github/workflows/build.yml`) t
 4. **No custom timestamp format**: Timestamps use a fixed ISO 8601 UTC format (`[YYYY-MM-DDThh:mm:ss.mmmZ]`). Local time or custom formats are not supported.
 5. **Maximum 63 output files**: Limited by `MAXIMUM_WAIT_OBJECTS` (64) minus 1 for the stdout writer thread.
 6. **No stderr capture**: Only stdout from the upstream program is captured. To include stderr, use shell redirection (`2>&1`) before the pipe.
-7. **No regex filtering or line selection**: Unlike `grep` or `sed`, `tee` passes all data through unmodified. Filtering must be done by other tools in the pipeline.
+7. **Substring grep only**: The `--grep` filter performs case-insensitive ASCII substring matching. Full regular expressions, inverted matching (`-v`), and per-file patterns are not supported. For advanced filtering, pipe through `findstr` or `grep` in addition to `tee`.
 
 ## Examples
 
@@ -698,6 +899,129 @@ streaming-app.exe | tee.exe -abef stream.log
 ```
 
 Append mode + buffering + ANSI escape processing + flush after each write.
+
+### Filter errors to a log file (grep)
+
+```cmd
+msbuild project.sln 2>&1 | tee.exe --grep "error" build_errors.log
+```
+
+All build output appears in the console. Only lines containing "error" (case-insensitive) are written to `build_errors.log`.
+
+### Filter with timestamps and line numbers
+
+```cmd
+deploy.exe 2>&1 | tee.exe --grep "fail" -tn deploy_failures.log
+```
+
+Console gets everything. `deploy_failures.log` contains only lines with "fail", each prefixed with a timestamp and line number:
+```
+[2026-03-09T14:32:15.123Z] 1: FAILED: Connection to db-server timed out
+[2026-03-09T14:32:16.789Z] 2: FAILED: Rollback triggered
+```
+
+### Filter and strip ANSI codes
+
+```cmd
+colored-test-runner.exe | tee.exe --grep "FAIL" -es test_failures.txt
+```
+
+Console shows full colored output (`-e`). `test_failures.txt` gets only failing test lines, with ANSI codes stripped (`-s`) for clean text.
+
+### Filter to HTML report
+
+```cmd
+ci-build.exe 2>&1 | tee.exe --grep "warning\|error" -e --html issues.html
+```
+
+Console renders colors. `issues.html` is a browsable HTML file containing only warning/error lines with full color rendering.
+
+### Basic log rotation
+
+```cmd
+my-service.exe 2>&1 | tee.exe --rotate 50M service.log
+```
+
+`service.log` is rotated when it reaches 50 MiB. Up to 5 rotated files are kept (default): `service.log.1` through `service.log.5`.
+
+### Rotation with custom keep count
+
+```cmd
+my-service.exe 2>&1 | tee.exe --rotate 100M --keep 20 service.log
+```
+
+Rotate at 100 MiB, keep up to 20 archived files. Total potential disk usage: ~2.1 GB.
+
+### Rotation with small threshold (high-frequency rotation)
+
+```cmd
+fast-producer.exe | tee.exe --rotate 1M --keep 3 -b output.dat
+```
+
+Rotate every 1 MiB, keep only 3 files. Buffered mode (`-b`) for high throughput.
+
+### Rotation with timestamps and append
+
+```cmd
+server.exe 2>&1 | tee.exe --rotate 50M --keep 10 -at server.log
+```
+
+Append mode (`-a`) for initial startup (preserves existing data). Timestamps (`-t`) on every line. Rotates at 50 MiB, keeps 10 files.
+
+### Rotation with HTML conversion
+
+```cmd
+colored-ci.exe 2>&1 | tee.exe --rotate 20M --keep 5 -e --html build.html
+```
+
+Each rotated file (`build.html`, `build.html.1`, ...) is a **self-contained HTML document** with its own DOCTYPE, CSS, and closing tags. Open any of them directly in a browser.
+
+### Rotation with line numbers
+
+```cmd
+batch-job.exe | tee.exe --rotate 10M --keep 3 -n batch.log
+```
+
+Line numbers **reset to 1** in each new rotated file, making each file independently readable.
+
+### Rotation combined with grep
+
+```cmd
+verbose-service.exe 2>&1 | tee.exe --grep "error" --rotate 5M --keep 10 -f errors.log
+```
+
+Only error lines are written to `errors.log`. The file is rotated when the filtered output reaches 5 MiB. Flush after each write (`-f`) for real-time monitoring.
+
+### Rotation + grep + timestamps + strip
+
+```cmd
+colored-app.exe 2>&1 | tee.exe --grep "warn" --rotate 20M --keep 5 -ets warnings.log
+```
+
+Console shows all colored output (`-e`). `warnings.log` gets only warning lines, with ANSI codes stripped (`-s`), timestamps (`-t`), rotated at 20 MiB.
+
+### Chain multiple tee instances for different filters
+
+```cmd
+build.exe 2>&1 | tee.exe --grep "error" errors.log | tee.exe --grep "warn" warnings.log > full.log
+```
+
+The first `tee` filters errors to `errors.log` and passes all data to stdout. The second `tee` filters warnings to `warnings.log`. The final redirect saves the complete output to `full.log`.
+
+### Full-featured production pipeline
+
+```cmd
+server.exe 2>&1 | tee.exe --rotate 100M --keep 20 --grep "error" -etsf errors.log
+```
+
+All options combined:
+- `--rotate 100M` -- rotate error log at 100 MiB
+- `--keep 20` -- retain 20 rotated files
+- `--grep "error"` -- only capture error lines
+- `-e` -- render ANSI colors in console
+- `-t` -- add UTC timestamps to each error line
+- `-s` -- strip ANSI codes from file output
+- `-f` -- flush after each write for real-time monitoring
 
 ### Stop parsing options with `--`
 
