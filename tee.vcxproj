@@ -287,6 +287,8 @@
       <AdditionalDependencies>pcre2-8-static.lib;kernel32.lib;Shell32.lib;user32.lib;libvcruntime.lib</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="tee.c" />
     <ClCompile Include="ansiconv.c" />
   </ItemGroup>
   <ItemGroup>
