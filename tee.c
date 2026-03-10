@@ -1,5 +1,6 @@
 /*
  * tee for Windows
+ * Copyright (c) 2026 Olivier Levon
  * Copyright (c) 2024 "dEajL3kA" <Cumpoing79@web.de>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
@@ -15,14 +16,17 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
  * OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include <winsdkver.h>
+#define _WIN32_WINNT 0x0A00
+#include <sdkddkver.h>
 #define WIN32_LEAN_AND_MEAN 1
 #include <Windows.h>
 #include <ShellAPI.h>
 #include <intrin.h>
 #include <stdarg.h>
-#include "include/cpu.h"
-#include "include/version.h"
-#include "include/ansiconv.h"
+#include <cpu.h>
+#include <version.h>
+#include <ansiconv.h>
 #include <pcre2.h>
 
 #pragma intrinsic(_InterlockedIncrement, _InterlockedDecrement, _InterlockedExchange, _InterlockedCompareExchange)
@@ -685,6 +689,12 @@ static BOOL parse_argument(options_t *const options, const char *const argument)
 }
 
 // --------------------------------------------------------------------------
+// Forward declarations
+// --------------------------------------------------------------------------
+
+static wchar_t *utf8_to_utf16(const char *const input);
+
+// --------------------------------------------------------------------------
 // Help screen
 // --------------------------------------------------------------------------
 
@@ -697,7 +707,7 @@ static void print_helpscreen(const HANDLE hStdErr, const BOOL full)
         write_text(hStdErr, L"\n"
             L"Copy standard input to output file(s), and also to standard output.\n\n"
             L"Usage:\n"
-            L"  gizmo.exe [...] | tee.exe [options] <file_1> ... <file_n>\n\n"
+            L"  gizmo.exe [...] | tee.exe [options] [--] <file_1> ... <file_n>\n\n"
             L"Options:\n"
             L"  -a --append      Append to the existing file, instead of truncating\n"
             L"  -b --buffer      Enable write combining, i.e. buffer small chunks\n"
@@ -711,7 +721,28 @@ static void print_helpscreen(const HANDLE hStdErr, const BOOL full)
             L"  -d --delay       Add a small delay after each read operation\n"
             L"     --grep <pat>  Only write lines matching regex <pat> to output file(s)\n"
             L"     --rotate <sz> Rotate output file(s) when they reach <sz> (e.g., 50M)\n"
-            L"     --keep <n>    Keep <n> rotated files (default: 5)\n\n");
+            L"     --keep <n>    Keep <n> rotated files (default: 5)\n"
+            L"  -h --help        Display this help message and exit\n"
+            L"  -v --version     Display version information and exit\n\n");
+    }
+    else
+    {
+        char pcre2ver[24];
+        pcre2_config(PCRE2_CONFIG_VERSION, pcre2ver);
+        {
+            wchar_t *const pcre2verW = utf8_to_utf16(pcre2ver);
+            wchar_t *const pcre2line = format_string(L"PCRE2 %1!s!\n", pcre2verW ? pcre2verW : L"?");
+            if (pcre2line)
+            {
+                write_text(hStdErr, pcre2line);
+                LocalFree(pcre2line);
+            }
+            if (pcre2verW) LocalFree(pcre2verW);
+        }
+        write_text(hStdErr, L"Copyright (c) 2026 Olivier Levon\n"
+            L"Based on tee-win32 by dEajL3kA (https://github.com/dEajL3kA/tee-win32)\n"
+            L"License: MIT <https://opensource.org/licenses/MIT>\n"
+            L"https://github.com/olivierlevon/tee-win32\n");
     }
     if (versionString)
     {

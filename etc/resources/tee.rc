@@ -1,6 +1,6 @@
 /////////////////////////////////////////////////////////////////////////////
 //
-// Microsoft Visual C++ generated resource script.
+// tee for Windows - Version resource script
 //
 #include <version.h>
 #include <cpu.h>
@@ -37,15 +37,15 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION    MY_VERSION_NUMBER
  PRODUCTVERSION MY_VERSION_NUMBER
- FILEFLAGSMASK 0x17L
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 #ifdef _DEBUG
- FILEFLAGS 0x3L
+ FILEFLAGS (VS_FF_DEBUG | VS_FF_PRERELEASE)
 #else
- FILEFLAGS 0x2L
+ FILEFLAGS 0
 #endif
- FILEOS 0x40004L
- FILETYPE 0x1L
- FILESUBTYPE 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
 BEGIN
     BLOCK "StringFileInfo"
     BEGIN
@@ -57,10 +57,11 @@ BEGIN
             VALUE "FileVersion",      MY_VERSION_STRING
             VALUE "InternalName",     "tee-win32"
             VALUE "OriginalFilename", "tee.exe"
-            VALUE "LegalCopyright",   "Copyright (c) 2024 dEajL3kA <Cumpoing79@web.de>"
-            VALUE "CompanyName",      "dEajL3kA"
-            VALUE "LegalTrademarks",  "dEajL3kA"
-            VALUE "Comments",         "Released under the MIT license"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Olivier Levon, (c) 2024 dEajL3kA"
+            VALUE "CompanyName",      "Olivier Levon"
+            VALUE "LegalTrademarks",  "MIT License"
+            VALUE "Comments",         "Released under the MIT license - https://opensource.org/licenses/MIT"
+            VALUE "URL",              "https://github.com/olivierlevon/tee-win32"
         END
     END
     BLOCK "VarFileInfo"

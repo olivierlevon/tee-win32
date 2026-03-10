@@ -1,5 +1,21 @@
+# Visual Studio
 /.vs
+*.user
+*.suo
+*.ncb
+*.sdf
+*.opensdf
+*.opendb
+*.VC.db
+
+# Build output
 /**/out
 /**/obj
 /**/bin
-*.user
+
+# PCRE2 dependency (cloned locally) and compiled libraries
+/deps
+/lib
+
+# Generated HTML
+README.html

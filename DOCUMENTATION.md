@@ -47,6 +47,15 @@
 
 **tee for Windows** is a native Win32 implementation of the classic Unix `tee` command. It reads data from standard input (stdin) and simultaneously writes it to standard output (stdout) **and** one or more output files. Unlike ports based on MSYS2, Cygwin, or other POSIX emulation layers, this program is built directly on top of the Win32 API for maximum performance and minimal dependencies.
 
+This project is a fork of [tee-win32](https://github.com/dEajL3kA/tee-win32) by **dEajL3kA**, extended with the following features:
+
+- ANSI-to-HTML conversion (`--html`) and ANSI code stripping (`-s`/`--strip`)
+- ISO 8601 UTC timestamps (`-t`) and line numbers (`-n`) for output files
+- Regex-based line filtering (`--grep`) powered by PCRE2
+- Log rotation (`--rotate`/`--keep`) with configurable size thresholds and retention
+- ARM64 concurrency fixes (atomic accesses, memory barriers)
+- Build system modernisation: Visual Studio 2022, GitHub Actions CI, CMake-based PCRE2 integration
+
 Current version: **1.4.0**
 
 ## What is `tee`?
@@ -66,8 +75,8 @@ stdin ---> [tee.exe] --+---> file_2.txt
 ### Operating System
 
 - **Windows only** -- This program exclusively targets Microsoft Windows.
-- Minimum requirement: **Windows Vista** or later (including Windows Server 2008+).
-- Uses Win32 APIs that are not available on Windows XP or earlier (e.g., `SleepConditionVariableSRW`, Slim Reader/Writer Locks, Condition Variables).
+- Minimum requirement: **Windows 10** or later (including Windows Server 2016+). Older versions (Vista, 7, 8, 8.1) are not supported.
+- Uses Win32 APIs such as `SleepConditionVariableSRW`, Slim Reader/Writer Locks, and Condition Variables.
 
 ### Processor Architectures
 
@@ -138,7 +147,7 @@ Options can be specified as short flags (`-a`), long flags (`--append`), or comb
 | `-n` | `--linenumber` | **Line numbers.** Prepends a line number to each line in the output files. Uses a 64-bit counter, supporting logs with up to 18 quintillion lines. Stdout is not affected (raw passthrough). See [Line Decoration](#line-decoration-timestamps-and-line-numbers). |
 | `-s` | `--strip` | **Strip ANSI codes.** Removes all ANSI escape sequences from the output files, producing clean plain text. Stdout is not affected (raw passthrough). Mutually exclusive with `--html`. See [ANSI Code Stripping](#ansi-code-stripping). |
 | `-t` | `--timestamp` | **Timestamps.** Prepends an ISO 8601 UTC timestamp to each line in the output files. Format: `[YYYY-MM-DDThh:mm:ss.mmmZ]`. Stdout is not affected (raw passthrough). See [Line Decoration](#line-decoration-timestamps-and-line-numbers). |
-| `-v` | `--version` | **Version.** Displays the version string only, then exits. |
+| `-v` | `--version` | **Version.** Displays the version string, PCRE2 version, copyright, fork origin, license, and project URL, then exits. |
 | | `--grep <pat>` | **Grep filter.** Only write lines matching the regular expression `<pat>` (case-insensitive, PCRE2 syntax) to output files. Stdout always receives all data unfiltered. See [Line Filtering: Grep](#line-filtering-grep). |
 | | `--rotate <sz>` | **Log rotation.** When an output file reaches `<sz>` bytes, rotate it (rename to `.1`, shift older files, create new empty file). Supports `K`, `M`, `G` suffixes. See [Log Rotation](#log-rotation). |
 | | `--keep <n>` | **Rotation keep count.** Keep `<n>` rotated files (default: 5). Oldest files beyond `<n>` are deleted. Only meaningful with `--rotate`. |
@@ -747,7 +756,7 @@ In Debug builds (`_DEBUG` defined), the standard CRT startup is used, which prov
 
 ### Build Tool
 
-The project uses **Visual Studio 2022** with the **v143 platform toolset**. It is a pure C project with two source files (`tee.c` and `ansiconv.c`) and a Visual Studio solution (`tee.sln`) and project file (`tee.vcxproj`).
+The project uses **Visual Studio 2022** with the **v143 platform toolset**. It is a pure C project with two source files (`tee.c` and `ansiconv.c`) and a Visual Studio solution (`tee.sln`) and project file (`tee.vcxproj`). The project also supports building with the **LLVM/Clang toolset** (`ClangCL`) bundled with VS2022, as well as standalone `clang-cl` via CMake.
 
 ### Dependencies
 
@@ -755,21 +764,38 @@ The project uses **Visual Studio 2022** with the **v143 platform toolset**. It i
 
 ### Build Configurations
 
-| Configuration | Optimization | CRT | ASAN | Assertions | Entry Point |
-|---|---|---|---|---|---|
-| **Debug x86** | Disabled | Debug DLL | Yes | Enabled | Standard CRT |
-| **Debug x64** | Disabled | Debug DLL | Yes | Enabled | Standard CRT |
-| **Debug ARM64** | Disabled | Debug DLL | No | Enabled | Standard CRT |
-| **Release x86** | MaxSpeed + LTCG | None (no CRT) | No | Disabled | `_startup` |
-| **Release x64** | MaxSpeed + LTCG | None (no CRT) | No | Disabled | `_startup` |
-| **Release ARM64** | MaxSpeed + LTCG | None (no CRT) | No | Disabled | `_startup` |
+| Configuration | Optimization | CRT | ASAN | Assertions | Debug Info | Entry Point |
+|---|---|---|---|---|---|---|
+| **Debug x86** | Disabled | Debug DLL | Yes | Enabled | Full PDB | Standard CRT |
+| **Debug x64** | Disabled | Debug DLL | Yes | Enabled | Full PDB | Standard CRT |
+| **Debug ARM64** | Disabled | Debug DLL | No | Enabled | Full PDB | Standard CRT |
+| **Release x86** | MaxSpeed + LTCG | None (no CRT) | No | Disabled | PDB (separate) | `_startup` |
+| **Release x64** | MaxSpeed + LTCG | None (no CRT) | No | Disabled | PDB (separate) | `_startup` |
+| **Release ARM64** | MaxSpeed + LTCG | None (no CRT) | No | Disabled | PDB (separate) | `_startup` |
+
+All configurations generate debug information (PDB files). Release PDBs are separate files (`tee.pdb`) that do not increase the size of the executable. They enable post-mortem debugging with WinDbg, crash dump analysis, and profiling.
 
 Release builds enable:
-- Whole Program Optimization (WPO) / Link-Time Code Generation (LTCG)
+- Whole Program Optimization (WPO) / Link-Time Code Generation (LTCG) -- MSVC only; skipped for ClangCL
 - Function-level linking and COMDAT folding
 - Intrinsic functions
 - Frame pointer omission
 - Warnings treated as errors (Level 4)
+
+### Building with LLVM/Clang
+
+The vcxproj supports the `ClangCL` platform toolset. MSVC-only options (`WholeProgramOptimization`, `LinkTimeCodeGeneration`, `EnableEnhancedInstructionSet`) are automatically skipped when `PlatformToolset=ClangCL`.
+
+```cmd
+REM MSBuild with ClangCL
+MSBuild.exe /p:PlatformToolset=ClangCL /p:Platform=x64 /p:Configuration=Release /t:rebuild tee.sln
+
+REM CMake with clang-cl (from a VS Developer Command Prompt)
+cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+Install the ClangCL toolset via the Visual Studio Installer: **Individual components > C++ Clang tools for Windows**.
 
 ### GitHub Actions CI
 
@@ -1054,6 +1080,6 @@ The `--` ensures that `-weird-filename.txt` is treated as a file name, not as an
 
 ## License
 
-MIT License. Copyright (c) 2024 "dEajL3kA".
+MIT License. Copyright (c) 2026 Olivier Levon. Copyright (c) 2024 "dEajL3kA".
 
 See [LICENSE.txt](LICENSE.txt) for the full license text.

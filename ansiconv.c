@@ -15,9 +15,12 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
  * OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include <winsdkver.h>
+#define _WIN32_WINNT 0x0A00
+#include <sdkddkver.h>
 #define WIN32_LEAN_AND_MEAN 1
 #include <Windows.h>
-#include "include/ansiconv.h"
+#include <ansiconv.h>
 
 /* ========================================================================== */
 /* Constants                                                                  */
