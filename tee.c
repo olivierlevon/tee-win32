@@ -748,7 +748,7 @@ int tee_main(const int argc, char *const argv[])
     HANDLE hThreads[MAX_THREADS], hMyFiles[MAX_THREADS - 1U];
     int exitCode = 1, argOff = 1;
     BOOL myFlag = TRUE, readErrors = FALSE;
-    DWORD fileCount = 0U, threadCount = 0U, myIndex = 0U, bytesRead = 0U, totalBytes = 0U;
+    DWORD fileCount = 0U, threadCount = 0U, myIndex = 0U, bytesRead = 0U, totalBytes = 0U, outputCount = 0U;
     PSRWLOCK rwLock = NULL;
     options_t options;
     static thread_t threadData[MAX_THREADS];
@@ -961,7 +961,7 @@ int tee_main(const int argc, char *const argv[])
     }
 
     /* Determine number of outputs */
-    const DWORD outputCount = fileCount + 1U;
+    outputCount = fileCount + 1U;
 
     /* Start threads */
     for (DWORD threadId = 0; threadId < outputCount; ++threadId)
