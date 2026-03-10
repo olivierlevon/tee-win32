@@ -2,7 +2,7 @@
 cd /d "%~dp0"
 
 if "%MSVC_PATH%"=="" (
-	set "MSVC_PATH=C:\Program Files (x86)\Microsoft Visual Studio\2019\Community"
+	set "MSVC_PATH=C:\Program Files\Microsoft Visual Studio\2022\Community"
 )
 
 if "%PANDOC_EXE%"=="" (
@@ -17,6 +17,13 @@ if exist "%MSVC_PATH%\VC\Auxiliary\Build\vcvarsall.bat" (
 	echo vcvarsall.bat not found. Please check your MSVC_PATH variable!
 	goto BuildError
 )
+
+REM ------------------------------------------------------------
+REM BUILD PCRE2 STATIC LIBRARIES
+REM ------------------------------------------------------------
+
+call "%CD%\build_pcre2.bat"
+if not "%ERRORLEVEL%"=="0" goto BuildError
 
 REM ------------------------------------------------------------
 REM CLEAN UP
