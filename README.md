@@ -27,7 +27,7 @@ tee for Windows
 Copy standard input to output file(s), and also to standard output.
 
 Usage:
-  gizmo.exe [...] | tee.exe [options] <file_1> ... <file_n>
+  gizmo.exe [...] | tee.exe [options] [--] <file_1> ... <file_n>
 
 Options:
   -a --append      Append to the existing file, instead of truncating
@@ -43,6 +43,8 @@ Options:
      --grep <pat>  Only write lines matching regex <pat> to output file(s)
      --rotate <sz> Rotate output file(s) when they reach <sz> (e.g., 50M)
      --keep <n>    Keep <n> rotated files (default: 5)
+  -h --help        Display this help message and exit
+  -v --version     Display version information and exit
 ```
 
 ### Terminal output
@@ -60,7 +62,7 @@ It uses multi-threaded I/O and triple buffering for maximum throughput. See [DOC
 
 ## System Requirements
 
-This application requires **Windows 10** or later (including Windows 11). All 32-Bit and 64-Bit editions, including ARM64, are supported. Older versions of Windows (Vista, 7, 8, 8.1) are **not** supported.
+This application requires **Windows 10** or later (including Windows 11 and Windows Server 2016+). All 32-Bit and 64-Bit editions, including ARM64, are supported. Older versions of Windows (Vista, 7, 8, 8.1) are **not** supported.
 
 ## Website
 
@@ -73,6 +75,7 @@ This application requires **Windows 10** or later (including Windows 11). All 32
 - **Visual Studio 2022** (Community edition or higher) with the **Desktop development with C++** workload
   - Includes MSBuild, v143 toolset, and Windows SDK
   - ARM64 build tools if you need the ARM64 target
+  - **Optional:** LLVM/Clang toolset (`ClangCL`) &mdash; install via the VS Installer ("C++ Clang tools for Windows")
 - **CMake** (in PATH) &mdash; required to build the PCRE2 dependency
 - **Pandoc** (optional) &mdash; only needed to regenerate `README.html`
 - **Git** &mdash; to clone the PCRE2 source
@@ -125,6 +128,22 @@ MSBuild.exe /p:Platform=ARM64 /p:Configuration=Release /t:rebuild tee.sln
 
 Or open `tee.sln` in Visual Studio 2022 and build from the IDE.
 
+### Building with LLVM/Clang (ClangCL)
+
+The project supports building with the LLVM/Clang toolset bundled with Visual Studio 2022.
+Override the platform toolset via MSBuild:
+
+```cmd
+MSBuild.exe /p:PlatformToolset=ClangCL /p:Platform=x64 /p:Configuration=Release /t:rebuild tee.sln
+```
+
+Or via CMake with `clang-cl` (from a VS Developer Command Prompt):
+
+```cmd
+cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
 ### Environment variables
 
 | Variable | Default | Description |
@@ -139,6 +158,8 @@ Or open `tee.sln` in Visual Studio 2022 and build from the IDE.
 | `out\tee-x86.exe` | Windows x86 (32-bit) |
 | `out\tee-x64.exe` | Windows x64 (64-bit) |
 | `out\tee-a64.exe` | Windows ARM64 |
+
+All configurations (Debug and Release) generate PDB debug symbol files alongside the executables, enabling post-mortem debugging and crash dump analysis.
 
 ## License
 

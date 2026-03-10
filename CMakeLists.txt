@@ -1,11 +1,15 @@
 # ==========================================================================
 # tee for Windows - CMake build
 #
-# Usage:
+# Usage (MSVC):
 #   cmake -B build -G "Visual Studio 17 2022" -A x64
 #   cmake --build build --config Release
 #
-# Or with Ninja (from a VS Developer Command Prompt):
+# Usage (Clang/LLVM via clang-cl, from a VS Developer Command Prompt):
+#   cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=Release
+#   cmake --build build
+#
+# Or with Ninja + MSVC (from a VS Developer Command Prompt):
 #   cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 #   cmake --build build
 #
@@ -84,27 +88,39 @@ target_link_libraries(tee PRIVATE
     user32
 )
 
-# Embed the application manifest
-set_target_properties(tee PROPERTIES
-    LINK_FLAGS "/MANIFEST:EMBED /MANIFESTINPUT:\"${CMAKE_SOURCE_DIR}/etc/resources/compatibility.manifest\""
-)
-
 # --------------------------------------------------------------------------
-# Release optimizations (MSVC)
+# Compiler-specific options (MSVC and clang-cl)
 # --------------------------------------------------------------------------
 if(MSVC)
     target_compile_options(tee PRIVATE
         /W4
         /utf-8
-        $<$<CONFIG:Release>:/O2 /Oi /GL /GS- /Oy>
+        $<$<CONFIG:Release>:/O2 /Oi /GL /GS- /Oy /Zi>
         $<$<CONFIG:Debug>:/W3 /Od /Zi>
     )
     target_link_options(tee PRIVATE
-        /SUBSYSTEM:CONSOLE
+        /SUBSYSTEM:CONSOLE,10.0
+        /MANIFEST:EMBED
+        /DEBUG
+        "/MANIFESTINPUT:${CMAKE_SOURCE_DIR}/etc/resources/compatibility.manifest"
         $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>
     )
-    # Static CRT for Release
+    # Static CRT for Release, dynamic for Debug
     set_property(TARGET tee PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    # Clang with GNU-like driver (e.g. clang --target=...-windows-msvc)
+    target_compile_options(tee PRIVATE
+        -Wall -Wextra
+        $<$<CONFIG:Release>:-O2 -g>
+        $<$<CONFIG:Debug>:-O0 -g>
+    )
+    target_link_options(tee PRIVATE
+        /SUBSYSTEM:CONSOLE,10.0
+        /MANIFEST:EMBED
+        /DEBUG
+        "/MANIFESTINPUT:${CMAKE_SOURCE_DIR}/etc/resources/compatibility.manifest"
+        $<$<CONFIG:Release>:/OPT:REF /OPT:ICF>
     )
 endif()
