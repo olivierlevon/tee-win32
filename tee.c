@@ -71,7 +71,7 @@ static BOOL is_terminal(const HANDLE handle)
 static DWORD count_handles(const HANDLE *const array, const size_t maximum)
 {
     DWORD counter;
-    for (counter = 0U; counter < maximum; ++counter)
+    for (counter = 0U; counter < (DWORD)maximum; ++counter)
     {
         if (!array[counter])
         {
@@ -312,6 +312,11 @@ static volatile LONG g_pending[BUFFERS] = { 0 };
 static SRWLOCK g_rwLocks[BUFFERS];
 static CONDITION_VARIABLE g_condIsReady[BUFFERS], g_condAllDone[BUFFERS];
 
+/* Forward declarations */
+static BOOL line_matches(const BYTE *line, DWORD line_len, const pcre2_code *regex, pcre2_match_data *match_data);
+static DWORD grep_filter_buffer(thread_t *param, const BYTE *data, DWORD size, BYTE *out_buf, DWORD out_cap);
+static void rotate_file(thread_t *param);
+
 static DWORD WINAPI writer_thread_start_routine(const LPVOID lpThreadParameter)
 {
     DWORD bytesWritten = 0U, myIndex = 0U;
@@ -455,7 +460,7 @@ static BOOL parse_size(const char *str, ULONGLONG *result)
         return FALSE;
 
     char suffix = *p;
-    if (suffix >= 'A' && suffix <= 'Z') suffix += 32;
+    if (suffix >= 'A' && suffix <= 'Z') suffix = (char)(suffix + 32);
     if (suffix == 'k')      { val *= 1024ULL; p++; }
     else if (suffix == 'm') { val *= 1024ULL * 1024ULL; p++; }
     else if (suffix == 'g') { val *= 1024ULL * 1024ULL * 1024ULL; p++; }
@@ -611,7 +616,7 @@ options_t;
 
 static char to_lower_ascii(const char c)
 {
-    return (c >= 'A' && c <= 'Z') ? (c + 32) : c;
+    return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
 }
 
 static int stricmp_ascii(const char *a, const char *b)

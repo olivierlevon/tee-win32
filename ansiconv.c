@@ -334,7 +334,7 @@ static void out_u64(ansi_conv_t *conv, ULONGLONG val)
     }
     while (val > 0ULL)
     {
-        tmp[len++] = '0' + (char)(val % 10ULL);
+        tmp[len++] = (char)('0' + (val % 10ULL));
         val /= 10ULL;
     }
     while (len > 0)
