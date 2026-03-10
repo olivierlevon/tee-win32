@@ -32,7 +32,7 @@ jobs:
       run: |
         @echo off
 
-        if "${{ matrix.platform }}"=="x86" ( set ARCH=Win32 ) else if "${{ matrix.platform }}"=="x64" ( set ARCH=x64 ) else ( set ARCH=ARM64 )
+        if "${{ matrix.platform }}"=="x86" (set ARCH=Win32) else if "${{ matrix.platform }}"=="x64" (set ARCH=x64) else (set ARCH=ARM64)
         set CFG=${{ matrix.configuration }}
 
         set STATIC_RT=OFF
@@ -53,7 +53,7 @@ jobs:
         )
 
         if not exist deps\pcre2\include mkdir deps\pcre2\include
-        copy /Y "%BDIR%\pcre2.h" "deps\pcre2\include\pcre2.h"
+        copy /Y "%BDIR%\interface\pcre2.h" "deps\pcre2\include\pcre2.h"
 
     - name: Build
       run: msbuild tee.sln /p:Platform=${{ matrix.platform }} /p:Configuration=${{ matrix.configuration }} /m
