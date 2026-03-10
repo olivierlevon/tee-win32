@@ -1238,6 +1238,10 @@ int wmain(const int argc, const wchar_t *const argv[])
 // CRT intrinsic stubs (required for PCRE2 static lib with /NODEFAULTLIB)
 // --------------------------------------------------------------------------
 
+#ifndef _M_ARM64
+/* On ARM64, these are provided by libvcruntime.lib (which also provides
+   _InterlockedXxx that are not compiler intrinsics in ARM64 C mode). */
+
 #pragma function(memset, memcpy, memmove, memcmp, memchr, strlen)
 
 void *memset(void *dst, int c, size_t n)
@@ -1310,6 +1314,8 @@ size_t strlen(const char *s)
     while (*p) p++;
     return (size_t)(p - s);
 }
+
+#endif /* !_M_ARM64 */
 
 void *malloc(size_t size)
 {
