@@ -53,7 +53,7 @@ jobs:
         )
 
         if not exist deps\pcre2\include mkdir deps\pcre2\include
-        copy /Y "%BDIR%\pcre2.h" "deps\pcre2\include\pcre2.h"
+        copy /Y "%BDIR%\interface\pcre2.h" "deps\pcre2\include\pcre2.h"
 
     - name: Build
       run: msbuild tee.sln /p:Platform=${{ matrix.platform }} /p:Configuration=${{ matrix.configuration }} /m
