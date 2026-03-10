@@ -1238,7 +1238,7 @@ int wmain(const int argc, const wchar_t *const argv[])
 // CRT intrinsic stubs (required for PCRE2 static lib with /NODEFAULTLIB)
 // --------------------------------------------------------------------------
 
-#pragma function(memset, memcpy, memmove, strlen)
+#pragma function(memset, memcpy, memmove, memcmp, memchr, strlen)
 
 void *memset(void *dst, int c, size_t n)
 {
@@ -1271,11 +1271,54 @@ void *memmove(void *dst, const void *src, size_t n)
     return dst;
 }
 
+int memcmp(const void *s1, const void *s2, size_t n)
+{
+    const unsigned char *p1 = (const unsigned char *)s1;
+    const unsigned char *p2 = (const unsigned char *)s2;
+    while (n--)
+    {
+        if (*p1 != *p2) return *p1 - *p2;
+        p1++; p2++;
+    }
+    return 0;
+}
+
+void *memchr(const void *s, int c, size_t n)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    while (n--)
+    {
+        if (*p == (unsigned char)c) return (void *)p;
+        p++;
+    }
+    return NULL;
+}
+
+char *strchr(const char *s, int c)
+{
+    while (*s)
+    {
+        if (*s == (char)c) return (char *)s;
+        s++;
+    }
+    return (c == '\0') ? (char *)s : NULL;
+}
+
 size_t strlen(const char *s)
 {
     const char *p = s;
     while (*p) p++;
     return (size_t)(p - s);
+}
+
+void *malloc(size_t size)
+{
+    return HeapAlloc(GetProcessHeap(), 0, size);
+}
+
+void free(void *ptr)
+{
+    if (ptr) HeapFree(GetProcessHeap(), 0, ptr);
 }
 
 #pragma warning(disable: 4702)
