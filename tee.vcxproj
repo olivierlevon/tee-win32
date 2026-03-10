@@ -284,7 +284,7 @@
       <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
       <EntryPointSymbol>_startup</EntryPointSymbol>
       <AdditionalLibraryDirectories>$(SolutionDir)lib\$(Platform)\$(Configuration)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>pcre2-8-static.lib;kernel32.lib;Shell32.lib;user32.lib;libvcruntime.lib</AdditionalDependencies>
+      <AdditionalDependencies>pcre2-8-static.lib;kernel32.lib;Shell32.lib;user32.lib</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
