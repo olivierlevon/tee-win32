@@ -59,19 +59,27 @@ function Run-Tee {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
 
-    $proc = [System.Diagnostics.Process]::Start($psi)
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    $proc.Start() | Out-Null
+
+    # Read stderr asynchronously to avoid deadlocks
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
+
     if ($Input) {
         $proc.StandardInput.Write($Input)
     }
     $proc.StandardInput.Close()
 
     $stdout = $proc.StandardOutput.ReadToEnd()
-    $stderr = $proc.StandardError.ReadToEnd()
-    $proc.WaitForExit(10000)
-    if (-not $proc.HasExited) { $proc.Kill() }
+    $proc.WaitForExit()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+
+    $code = $proc.ExitCode
+    $proc.Dispose()
 
     return @{
-        ExitCode = $proc.ExitCode
+        ExitCode = $code
         Stdout   = $stdout
         Stderr   = $stderr
     }
