@@ -168,6 +168,7 @@
       <DisableSpecificWarnings>4706; 6258; 28112</DisableSpecificWarnings>
       <AdditionalIncludeDirectories>$(SolutionDir)include;$(SolutionDir)deps\pcre2\include</AdditionalIncludeDirectories>
       <ExceptionHandling>false</ExceptionHandling>
+      <AdditionalOptions>/Gs9999999 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -237,6 +238,7 @@
       <DisableSpecificWarnings>4706; 6258; 28112</DisableSpecificWarnings>
       <AdditionalIncludeDirectories>$(SolutionDir)include;$(SolutionDir)deps\pcre2\include</AdditionalIncludeDirectories>
       <ExceptionHandling>false</ExceptionHandling>
+      <AdditionalOptions>/Gs9999999 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -273,6 +275,7 @@
       <DisableSpecificWarnings>4706; 6258; 28112</DisableSpecificWarnings>
       <AdditionalIncludeDirectories>$(SolutionDir)include;$(SolutionDir)deps\pcre2\include</AdditionalIncludeDirectories>
       <ExceptionHandling>false</ExceptionHandling>
+      <AdditionalOptions>/Gs9999999 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
