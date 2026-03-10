@@ -25,15 +25,7 @@
 #include "include/ansiconv.h"
 #include <pcre2.h>
 
-#ifdef _M_ARM64
-#pragma intrinsic(_InterlockedIncrement_acq, _InterlockedDecrement_acq, _InterlockedExchange_acq, _InterlockedCompareExchange_acq)
-#define _InterlockedIncrement(p)              _InterlockedIncrement_acq(p)
-#define _InterlockedDecrement(p)              _InterlockedDecrement_acq(p)
-#define _InterlockedExchange(p, v)            _InterlockedExchange_acq(p, v)
-#define _InterlockedCompareExchange(p, v, c)  _InterlockedCompareExchange_acq(p, v, c)
-#else
 #pragma intrinsic(_InterlockedIncrement, _InterlockedDecrement, _InterlockedExchange, _InterlockedCompareExchange)
-#endif
 
 #define ATOMIC_READ(PTR)        _InterlockedCompareExchange((PTR), 0L, 0L)
 #define ATOMIC_WRITE(PTR, VAL)  _InterlockedExchange((PTR), (VAL))
