@@ -1238,7 +1238,7 @@ int wmain(const int argc, const wchar_t *const argv[])
 // CRT intrinsic stubs (required for PCRE2 static lib with /NODEFAULTLIB)
 // --------------------------------------------------------------------------
 
-#pragma function(memset, memcpy, memmove)
+#pragma function(memset, memcpy, memmove, strlen)
 
 void *memset(void *dst, int c, size_t n)
 {
