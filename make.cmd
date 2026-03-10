@@ -65,7 +65,7 @@ if exist "%CD%\out\tee-x64.exe" del /F "%CD%\out\tee-x64.exe"
 if exist "%CD%\out\tee-a64.exe" del /F "%CD%\out\tee-a64.exe"
 
 copy /Y /B "%CD%\bin\Win32\Release\tee.exe" "%CD%\out\tee-x86.exe"
-copy /Y /B "%CD%\bin\x64\.\Release\tee.exe" "%CD%\out\tee-x64.exe"
+copy /Y /B "%CD%\bin\x64\Release\tee.exe" "%CD%\out\tee-x64.exe"
 copy /Y /B "%CD%\bin\ARM64\Release\tee.exe" "%CD%\out\tee-a64.exe"
 
 attrib +R "%CD%\out\tee-x86.exe"

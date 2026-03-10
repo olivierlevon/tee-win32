@@ -6,7 +6,6 @@
 - [What is `tee`?](#what-is-tee)
 - [Platform Support](#platform-support)
 - [Unicode and Character Encoding](#unicode-and-character-encoding)
-- [File Name Handling](#file-name-handling)
 - [Command-Line Options](#command-line-options)
 - [Input and Output Data Format](#input-and-output-data-format)
 - [ANSI Escape Code Support](#ansi-escape-code-support)
@@ -19,16 +18,6 @@
   - [Timestamp Format](#timestamp-format)
   - [Line Number Format](#line-number-format)
   - [Combining with ANSI Options](#combining-with-ansi-options)
-- [Multi-Threaded Architecture](#multi-threaded-architecture)
-- [Buffering and Write Combining](#buffering-and-write-combining)
-- [Signal Handling (CTRL+C)](#signal-handling-ctrlc)
-- [NUL Device as Output Accelerator](#nul-device-as-output-accelerator)
-- [Pipe Behavior and Redirected Programs](#pipe-behavior-and-redirected-programs)
-- [File Sharing and Concurrent Access](#file-sharing-and-concurrent-access)
-- [Custom CRT Startup (Release Builds)](#custom-crt-startup-release-builds)
-- [Build System and CI/CD](#build-system-and-cicd)
-- [Exit Codes](#exit-codes)
-- [Limitations](#limitations)
 - [Line Filtering: Grep](#line-filtering-grep)
   - [Pattern Matching](#pattern-matching)
   - [Grep with Other Options](#grep-with-other-options)
@@ -38,6 +27,15 @@
   - [Keep Count](#keep-count)
   - [Rotation with Converters](#rotation-with-converters)
   - [Rotation with Other Options](#rotation-with-other-options)
+- [Multi-Threaded Architecture](#multi-threaded-architecture)
+- [Buffering and Write Combining](#buffering-and-write-combining)
+- [Signal Handling (CTRL+C)](#signal-handling-ctrlc)
+- [NUL Device as Output Accelerator](#nul-device-as-output-accelerator)
+- [File Sharing and Concurrent Access](#file-sharing-and-concurrent-access)
+- [Custom CRT Startup (Release Builds)](#custom-crt-startup-release-builds)
+- [Build System and CI/CD](#build-system-and-cicd)
+- [Exit Codes](#exit-codes)
+- [Limitations](#limitations)
 - [Examples](#examples)
 - [License](#license)
 
@@ -771,7 +769,7 @@ The project uses **Visual Studio 2022** with the **v143 platform toolset**. It i
 | **Debug ARM64** | Disabled | Debug DLL | No | Enabled | Full PDB | Standard CRT |
 | **Release x86** | MaxSpeed + LTCG | None (no CRT) | No | Disabled | PDB (separate) | `_startup` |
 | **Release x64** | MaxSpeed + LTCG | None (no CRT) | No | Disabled | PDB (separate) | `_startup` |
-| **Release ARM64** | MaxSpeed + LTCG | None (no CRT) | No | Disabled | PDB (separate) | `_startup` |
+| **Release ARM64** | MaxSpeed (no LTCG) | None (no CRT) | No | Disabled | PDB (separate) | `_startup` |
 
 All configurations generate debug information (PDB files). Release PDBs are separate files (`tee.pdb`) that do not increase the size of the executable. They enable post-mortem debugging with WinDbg, crash dump analysis, and profiling.
 

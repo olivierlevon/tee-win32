@@ -90,10 +90,13 @@ for %%P in (Win32 x64 ARM64) do (
 
         set BDIR=%BUILD_BASE%\%%P-%%C
 
+        set EXTRA_FLAGS=
+        if "%%C"=="Release" set EXTRA_FLAGS=-DCMAKE_C_FLAGS_RELEASE="/MT /O2 /Ob2 /DNDEBUG /GS- /Gs9999999"
+
         cmake -G "Visual Studio 17 2022" -A %%P ^
             -S %PCRE2_SRC% -B !BDIR! ^
             %COMMON_OPTS% ^
-            -DPCRE2_STATIC_RUNTIME=!STATIC_RT!
+            -DPCRE2_STATIC_RUNTIME=!STATIC_RT! !EXTRA_FLAGS!
         if errorlevel 1 (
             echo [ERROR] CMake configure failed for %%P/%%C
             set /a ERRORS+=1
@@ -128,7 +131,7 @@ for %%P in (Win32 x64 ARM64) do (
         :: Copy generated pcre2.h once (identical across platforms)
         if !HEADER_COPIED!==0 (
             if not exist "%INCLUDE_OUT%" mkdir "%INCLUDE_OUT%"
-            copy /Y "!BDIR!\pcre2.h" "%INCLUDE_OUT%\pcre2.h" >nul
+            copy /Y "!BDIR!\interface\pcre2.h" "%INCLUDE_OUT%\pcre2.h" >nul
             if not errorlevel 1 (
                 echo [OK] %INCLUDE_OUT%\pcre2.h
                 set HEADER_COPIED=1

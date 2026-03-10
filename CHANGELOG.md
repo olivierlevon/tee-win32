@@ -6,7 +6,7 @@ This project is a fork of [tee-win32](https://github.com/dEajL3kA/tee-win32) by 
 
 ---
 
-## [1.4.0] - 2026
+## [1.4.0] - 2026-03-10
 
 ### Added
 - **Grep filtering** (`--grep <pat>`) &mdash; regex-based line filtering powered by PCRE2
@@ -24,7 +24,7 @@ This project is a fork of [tee-win32](https://github.com/dEajL3kA/tee-win32) by 
 - Release linker conflict: ignore `MSVCRT` when linking with `/MT`
 - Various build fixes for PCRE2 integration across all platforms
 
-## [1.3.0] - 2026
+## [1.3.0] - 2026-03-01
 
 ### Added
 - **Timestamps** (`-t` / `--timestamp`) &mdash; ISO 8601 UTC timestamps on output file lines
@@ -34,7 +34,7 @@ This project is a fork of [tee-win32](https://github.com/dEajL3kA/tee-win32) by 
 ### Fixed
 - Undefined behavior, ARM64 memory barrier, and micro-optimizations from quality audit
 
-## [1.2.0] - 2026
+## [1.2.0] - 2026-02-15
 
 ### Added
 - **ANSI-to-HTML conversion** (`--html`) &mdash; converts ANSI escape codes to HTML in output files
@@ -45,7 +45,7 @@ This project is a fork of [tee-win32](https://github.com/dEajL3kA/tee-win32) by 
 - Upgraded project to Visual Studio 2022 (v143 toolset)
 - Added ARM64 cross-compilation to CI build matrix
 
-## [1.1.0] - 2026
+## [1.1.0] - 2026-02-01
 
 ### Added
 - GitHub Actions CI for Windows x86/x64/ARM64 builds
@@ -72,6 +72,6 @@ Original release by **dEajL3kA**.
 - Ignore SIGINT (`-i` / `--ignore`)
 - Small delay after read (`-d` / `--delay`)
 - Append mode (`-a` / `--append`)
-- Support for up to 32 output files
+- Support for up to 63 output files
 - NUL device as output accelerator
 - ARM64 platform support
