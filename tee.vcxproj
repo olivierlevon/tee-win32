@@ -176,7 +176,7 @@
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>MSVCRT</IgnoreSpecificDefaultLibraries>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
-      <MinimumRequiredVersion>5.1</MinimumRequiredVersion>
+      <MinimumRequiredVersion>10.0</MinimumRequiredVersion>
       <AdditionalLibraryDirectories>$(SolutionDir)lib\$(Platform)\$(Configuration)</AdditionalLibraryDirectories>
       <AdditionalDependencies>pcre2-8-static.lib;kernel32.lib;Shell32.lib;user32.lib</AdditionalDependencies>
     </Link>
@@ -244,7 +244,7 @@
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>MSVCRT</IgnoreSpecificDefaultLibraries>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
-      <MinimumRequiredVersion>5.2</MinimumRequiredVersion>
+      <MinimumRequiredVersion>10.0</MinimumRequiredVersion>
       <AdditionalLibraryDirectories>$(SolutionDir)lib\$(Platform)\$(Configuration)</AdditionalLibraryDirectories>
       <AdditionalDependencies>pcre2-8-static.lib;kernel32.lib;Shell32.lib;user32.lib</AdditionalDependencies>
     </Link>
@@ -276,6 +276,7 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>MSVCRT</IgnoreSpecificDefaultLibraries>
+      <MinimumRequiredVersion>10.0</MinimumRequiredVersion>
       <AdditionalLibraryDirectories>$(SolutionDir)lib\$(Platform)\$(Configuration)</AdditionalLibraryDirectories>
       <AdditionalDependencies>pcre2-8-static.lib;kernel32.lib;Shell32.lib;user32.lib</AdditionalDependencies>
     </Link>

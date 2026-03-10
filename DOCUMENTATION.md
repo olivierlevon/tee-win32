@@ -47,6 +47,15 @@
 
 **tee for Windows** is a native Win32 implementation of the classic Unix `tee` command. It reads data from standard input (stdin) and simultaneously writes it to standard output (stdout) **and** one or more output files. Unlike ports based on MSYS2, Cygwin, or other POSIX emulation layers, this program is built directly on top of the Win32 API for maximum performance and minimal dependencies.
 
+This project is a fork of [tee-win32](https://github.com/dEajL3kA/tee-win32) by **dEajL3kA**, extended with the following features:
+
+- ANSI-to-HTML conversion (`--html`) and ANSI code stripping (`-s`/`--strip`)
+- ISO 8601 UTC timestamps (`-t`) and line numbers (`-n`) for output files
+- Regex-based line filtering (`--grep`) powered by PCRE2
+- Log rotation (`--rotate`/`--keep`) with configurable size thresholds and retention
+- ARM64 concurrency fixes (atomic accesses, memory barriers)
+- Build system modernisation: Visual Studio 2022, GitHub Actions CI, CMake-based PCRE2 integration
+
 Current version: **1.4.0**
 
 ## What is `tee`?
@@ -66,8 +75,8 @@ stdin ---> [tee.exe] --+---> file_2.txt
 ### Operating System
 
 - **Windows only** -- This program exclusively targets Microsoft Windows.
-- Minimum requirement: **Windows Vista** or later (including Windows Server 2008+).
-- Uses Win32 APIs that are not available on Windows XP or earlier (e.g., `SleepConditionVariableSRW`, Slim Reader/Writer Locks, Condition Variables).
+- Minimum requirement: **Windows 10** or later (including Windows Server 2016+). Older versions (Vista, 7, 8, 8.1) are not supported.
+- Uses Win32 APIs such as `SleepConditionVariableSRW`, Slim Reader/Writer Locks, and Condition Variables.
 
 ### Processor Architectures
 
@@ -1054,6 +1063,6 @@ The `--` ensures that `-weird-filename.txt` is treated as a file name, not as an
 
 ## License
 
-MIT License. Copyright (c) 2024 "dEajL3kA".
+MIT License. Copyright (c) 2026 Olivier Levon. Copyright (c) 2024 "dEajL3kA".
 
 See [LICENSE.txt](LICENSE.txt) for the full license text.

@@ -1,6 +1,7 @@
 /*
  * tee for Windows - ANSI escape code converter
  * Copyright (c) 2026 Olivier Levon
+ * Copyright (c) 2024 "dEajL3kA" <Cumpoing79@web.de>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
  * associated documentation files (the "Software"), to deal in the Software without restriction,
@@ -15,9 +16,11 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
  * OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifndef _INC_TEEW32_ANSICONV_H
-#define _INC_TEEW32_ANSICONV_H
+#pragma once
 
+#include <winsdkver.h>
+#define _WIN32_WINNT 0x0A00
+#include <sdkddkver.h>
 #define WIN32_LEAN_AND_MEAN 1
 #include <Windows.h>
 
@@ -54,5 +57,3 @@ BOOL ansi_conv_flush(ansi_conv_t *conv);
 /* Reset converter state for log rotation (new file handle, reset counters).
  * Call ansi_conv_write_footer() before and ansi_conv_write_header() after. */
 void ansi_conv_reset_for_rotation(ansi_conv_t *conv, HANDLE hFile);
-
-#endif /* _INC_TEEW32_ANSICONV_H */
