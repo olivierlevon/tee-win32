@@ -58,6 +58,15 @@ jobs:
     - name: Build
       run: msbuild tee.sln /p:Platform=${{ matrix.platform }} /p:Configuration=${{ matrix.configuration }} /m
 
+    - name: Run tests
+      if: matrix.platform != 'a64'
+      shell: cmd
+      run: |
+        @echo off
+        if "${{ matrix.platform }}"=="x86" (set ARCH=Win32) else (set ARCH=x64)
+        set CFG=${{ matrix.configuration }}
+        powershell -ExecutionPolicy Bypass -File tests\run_tests.ps1 -TeeBinary "bin\%ARCH%\%CFG%\tee.exe"
+
     - name: Upload artifacts
       if: matrix.configuration == 'Release'
       uses: actions/upload-artifact@v4

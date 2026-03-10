@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.4.0). Leave empty to use latest tag.'
+        required: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: true
+      matrix:
+        platform: [x86, x64, a64]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Clone PCRE2
+      run: git clone --depth 1 https://github.com/PCRE2Project/pcre2.git deps/pcre2
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+      with:
+        vs-version: '[17.0,)'
+
+    - name: Build PCRE2 static library
+      shell: cmd
+      run: |
+        @echo off
+
+        if "${{ matrix.platform }}"=="x86" (set ARCH=Win32) else if "${{ matrix.platform }}"=="x64" (set ARCH=x64) else (set ARCH=ARM64)
+
+        set BDIR=deps\pcre2\build\%ARCH%-Release
+
+        cmake -G "Visual Studio 17 2022" -A %ARCH% -S deps\pcre2 -B %BDIR% -DBUILD_SHARED_LIBS=OFF -DPCRE2_BUILD_PCRE2_8=ON -DPCRE2_BUILD_PCRE2_16=OFF -DPCRE2_BUILD_PCRE2_32=OFF -DPCRE2_BUILD_TESTS=OFF -DPCRE2_BUILD_PCRE2GREP=OFF -DPCRE2_SUPPORT_JIT=OFF -DPCRE2_SUPPORT_UNICODE=OFF -DPCRE2_NEWLINE=ANYCRLF -DPCRE2_SUPPORT_BSR_ANYCRLF=ON -DPCRE2_STATIC_RUNTIME=ON -DCMAKE_C_FLAGS_RELEASE="/MT /O2 /Ob2 /DNDEBUG /GS- /Gs9999999"
+
+        cmake --build %BDIR% --config Release
+
+        if not exist lib\%ARCH%\Release mkdir lib\%ARCH%\Release
+        copy /Y "%BDIR%\Release\pcre2-8-static.lib" "lib\%ARCH%\Release\pcre2-8-static.lib"
+
+        if not exist deps\pcre2\include mkdir deps\pcre2\include
+        copy /Y "%BDIR%\interface\pcre2.h" "deps\pcre2\include\pcre2.h"
+
+    - name: Build
+      run: msbuild tee.sln /p:Platform=${{ matrix.platform }} /p:Configuration=Release /m
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: tee-${{ matrix.platform }}
+        path: bin/**/Release/tee.exe
+        if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Determine version tag
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "push" ]; then
+          TAG="${GITHUB_REF#refs/tags/}"
+        elif [ -n "${{ github.event.inputs.tag }}" ]; then
+          TAG="${{ github.event.inputs.tag }}"
+        else
+          TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo 'v0.0.0')"
+        fi
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+        echo "Release tag: $TAG"
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Package release assets
+      run: |
+        TAG="${{ steps.version.outputs.tag }}"
+        mkdir -p release
+
+        # Package each platform
+        for plat in x86 x64 a64; do
+          exe=$(find "artifacts/tee-${plat}" -name tee.exe -type f | head -1)
+          if [ -z "$exe" ]; then
+            echo "ERROR: tee.exe not found for ${plat}"
+            exit 1
+          fi
+          cp "$exe" "release/tee-${plat}.exe"
+        done
+
+        # Generate checksums
+        cd release
+        sha256sum tee-*.exe > SHA256SUMS.txt
+        cat SHA256SUMS.txt
+
+    - name: Extract changelog for this version
+      id: changelog
+      run: |
+        TAG="${{ steps.version.outputs.tag }}"
+        VER="${TAG#v}"
+        # Extract the section for this version from CHANGELOG.md
+        awk -v ver="$VER" '
+          /^## \[/ { if (found) exit; if (index($0, ver)) found=1; next }
+          found { print }
+        ' CHANGELOG.md > release_notes.md
+
+        if [ ! -s release_notes.md ]; then
+          echo "Release ${TAG}" > release_notes.md
+        fi
+
+        cat release_notes.md
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.tag }}
+        name: ${{ steps.version.outputs.tag }}
+        body_path: release_notes.md
+        draft: false
+        prerelease: false
+        files: |
+          release/tee-x86.exe
+          release/tee-x64.exe
+          release/tee-a64.exe
+          release/SHA256SUMS.txt
