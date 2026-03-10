@@ -1298,6 +1298,16 @@ void *memchr(const void *s, int c, size_t n)
     return NULL;
 }
 
+size_t strlen(const char *s)
+{
+    const char *p = s;
+    while (*p) p++;
+    return (size_t)(p - s);
+}
+
+#endif /* !_M_ARM64 */
+
+/* strchr, malloc, free are needed on all platforms (not in libvcruntime) */
 char *strchr(const char *s, int c)
 {
     while (*s)
@@ -1307,15 +1317,6 @@ char *strchr(const char *s, int c)
     }
     return (c == '\0') ? (char *)s : NULL;
 }
-
-size_t strlen(const char *s)
-{
-    const char *p = s;
-    while (*p) p++;
-    return (size_t)(p - s);
-}
-
-#endif /* !_M_ARM64 */
 
 void *malloc(size_t size)
 {
