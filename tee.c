@@ -25,7 +25,14 @@
 #include "include/ansiconv.h"
 #include <pcre2.h>
 
+/* On x86/x64, _InterlockedXxx are true compiler intrinsics and #pragma
+   intrinsic makes the compiler emit them inline.  On ARM64 in C mode,
+   they are NOT compiler intrinsics; <winnt.h> provides FORCEINLINE
+   wrappers (using ARM64-specific intrinsics like _InterlockedAdd).
+   The #pragma would override those inlines with unresolvable externals. */
+#ifndef _M_ARM64
 #pragma intrinsic(_InterlockedIncrement, _InterlockedDecrement, _InterlockedExchange, _InterlockedCompareExchange)
+#endif
 
 #define ATOMIC_READ(PTR)        _InterlockedCompareExchange((PTR), 0L, 0L)
 #define ATOMIC_WRITE(PTR, VAL)  _InterlockedExchange((PTR), (VAL))
@@ -1238,10 +1245,6 @@ int wmain(const int argc, const wchar_t *const argv[])
 // CRT intrinsic stubs (required for PCRE2 static lib with /NODEFAULTLIB)
 // --------------------------------------------------------------------------
 
-#ifndef _M_ARM64
-/* On ARM64, these are provided by libvcruntime.lib (which also provides
-   _InterlockedXxx that are not compiler intrinsics in ARM64 C mode). */
-
 #pragma function(memset, memcpy, memmove, memcmp, memchr, strlen)
 
 void *memset(void *dst, int c, size_t n)
@@ -1305,9 +1308,6 @@ size_t strlen(const char *s)
     return (size_t)(p - s);
 }
 
-#endif /* !_M_ARM64 */
-
-/* strchr, malloc, free are needed on all platforms (not in libvcruntime) */
 char *strchr(const char *s, int c)
 {
     while (*s)
