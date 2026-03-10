@@ -25,14 +25,7 @@
 #include "include/ansiconv.h"
 #include <pcre2.h>
 
-/* On x86/x64, _InterlockedXxx are true compiler intrinsics and #pragma
-   intrinsic makes the compiler emit them inline.  On ARM64 in C mode,
-   they are NOT compiler intrinsics; <winnt.h> provides FORCEINLINE
-   wrappers (using ARM64-specific intrinsics like _InterlockedAdd).
-   The #pragma would override those inlines with unresolvable externals. */
-#ifndef _M_ARM64
 #pragma intrinsic(_InterlockedIncrement, _InterlockedDecrement, _InterlockedExchange, _InterlockedCompareExchange)
-#endif
 
 #define ATOMIC_READ(PTR)        _InterlockedCompareExchange((PTR), 0L, 0L)
 #define ATOMIC_WRITE(PTR, VAL)  _InterlockedExchange((PTR), (VAL))
@@ -1330,6 +1323,9 @@ void free(void *ptr)
 
 #pragma warning(disable: 4702)
 
+#ifdef __cplusplus
+extern "C"
+#endif
 int _startup(void)
 {
     int i;

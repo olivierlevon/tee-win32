@@ -274,6 +274,7 @@
       <DisableSpecificWarnings>4706; 6258; 28112</DisableSpecificWarnings>
       <AdditionalIncludeDirectories>$(SolutionDir)include;$(SolutionDir)deps\pcre2\include</AdditionalIncludeDirectories>
       <ExceptionHandling>false</ExceptionHandling>
+      <CompileAs>CompileAsCpp</CompileAs>
       <AdditionalOptions>/Gs9999999 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
